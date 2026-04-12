@@ -409,7 +409,7 @@ function ProductForm({
           <p className="m-0 mt-1 font-mono text-sm text-gray-800">{product._id}</p>
         </div>
       ) : null}
-      <form onSubmit={handleSubmit} className="flex flex-col gap-3 max-h-[85vh] overflow-y-auto pr-1">
+      <form onSubmit={handleSubmit} className="flex flex-col gap-3">
         <input
           ref={inlineFileRef}
           type="file"
@@ -807,6 +807,12 @@ function ProductForm({
         </div>
 
         <SectionHeading>3D Visualizer</SectionHeading>
+        <p className="m-0 mb-2 text-xs text-gray-500 leading-relaxed">
+          Textures are shown on the product page 3D preview. Use Upload (ImageKit) or paste an HTTPS image URL.
+          The public site loads textures through your API proxy so WebGL can render them (CORS). Default allowed
+          host is ImageKit (<span className="font-mono">ik.imagekit.io</span>); for other CDNs set{' '}
+          <span className="font-mono">TEXTURE_PROXY_ALLOWED_HOSTS</span> on the API server (comma-separated hosts).
+        </p>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <label>
             <span className={labelClass}>Default Width (cm)</span>
