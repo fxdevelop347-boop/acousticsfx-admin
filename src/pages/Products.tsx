@@ -409,7 +409,7 @@ function ProductForm({
           <p className="m-0 mt-1 font-mono text-sm text-gray-800">{product._id}</p>
         </div>
       ) : null}
-      <form onSubmit={handleSubmit} className="flex flex-col gap-3 max-h-[85vh] overflow-y-auto pr-1">
+      <form onSubmit={handleSubmit} className="flex flex-col gap-3">
         <input
           ref={inlineFileRef}
           type="file"

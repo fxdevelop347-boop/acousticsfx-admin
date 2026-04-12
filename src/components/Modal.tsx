@@ -35,10 +35,10 @@ export default function Modal({ open, onClose, title, children, maxWidth = 'max-
       aria-labelledby={title ? 'modal-title' : undefined}
     >
       <div
-        className={`bg-white border border-gray-200 rounded-xl shadow-xl w-full ${maxWidth} max-h-[90vh] overflow-y-auto flex flex-col`}
+        className={`bg-white border border-gray-200 rounded-xl shadow-xl w-full ${maxWidth} max-h-[90vh] flex flex-col overflow-hidden`}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between flex-shrink-0 px-6 pt-5 pb-1">
+        <div className="flex items-center justify-between flex-shrink-0 px-6 pt-5 pb-3 border-b border-gray-100">
           {title ? (
             <h2 id="modal-title" className="m-0 text-lg font-semibold text-gray-800">
               {title}
@@ -55,7 +55,11 @@ export default function Modal({ open, onClose, title, children, maxWidth = 'max-
             <X size={20} strokeWidth={2} />
           </button>
         </div>
-        <div className={title ? 'px-6 pb-5 pt-3' : 'px-6 pb-5 pt-0'}>{children}</div>
+        <div
+          className={`flex-1 min-h-0 overflow-y-auto overscroll-contain px-6 pb-5 ${title ? 'pt-4' : 'pt-3'}`}
+        >
+          {children}
+        </div>
       </div>
     </div>
   );
