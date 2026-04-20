@@ -6,9 +6,19 @@ export interface SubProductSpec {
   value: string;
 }
 
+/** Perforation pattern for one uploaded texture (mm). */
+export interface VisualizerHoleProfile {
+  name: string;
+  hole: number;
+  spacing: number;
+  thumbnail?: string;
+}
+
+/** Admin-uploaded texture with nested hole profiles. */
 export interface VisualizerTexture {
   name: string;
   image: string;
+  profiles: VisualizerHoleProfile[];
 }
 
 export interface VisualizerDimensions {
@@ -91,6 +101,8 @@ export interface ProductItem {
   shortDescription?: string;
   metaTitle?: string;
   metaDescription?: string;
+  /** Public URL of product brochure PDF */
+  brochureUrl?: string;
   showTrademark?: boolean;
   specSectionTitle?: string;
   specDescription?: string;
@@ -106,6 +118,9 @@ export interface ProductItem {
   finishesSection?: SubProductFinishesSection;
   visualizerTextures?: VisualizerTexture[];
   visualizerDimensions?: VisualizerDimensions;
+  visualizerTitle?: string;
+  visualizerDescription?: string;
+  visualizerTechnicalCaption?: string;
   createdAt?: string;
   updatedAt?: string;
 }
