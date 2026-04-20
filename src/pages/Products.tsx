@@ -14,7 +14,7 @@ import {
   type SubProductFinishesSection,
   type SubProductCertification,
   type VisualizerTexture,
-  type VisualizerDimensions,
+  type VisualizerHoleProfile,
 } from '../api/products';
 import { useQueryClient } from '@tanstack/react-query';
 import type { CategoryItem } from '../api/categories';
@@ -24,24 +24,61 @@ import { inputClass, labelClass, cancelBtnClass, deleteBtnClass } from '../lib/s
 import PageShell from '../components/PageShell';
 import { EmptyState, ErrorState, InlineLoader } from '../components/EmptyState';
 import { slugify } from '../lib/slugify';
-import { uploadImage } from '../api/upload';
+import { uploadDocument, uploadImage } from '../api/upload';
 
 type InlineImageSlot =
   | { kind: 'certification'; index: number }
   | { kind: 'substrate'; index: number }
   | { kind: 'finish'; index: number }
   | { kind: 'gallery'; index: number }
-  | { kind: 'visualizer'; index: number };
+  | { kind: 'visualizerTexture'; textureIndex: number }
+  | { kind: 'visualizerHoleThumb'; textureIndex: number; profileIndex: number };
+
+type NumericInputValue = number | '';
+
+function parseNumericInput(value: string): NumericInputValue {
+  const trimmed = value.trim();
+  if (trimmed === '') return '';
+  const n = Number(trimmed);
+  return Number.isFinite(n) ? n : '';
+}
 
 const inlineUploadBtnClass =
   'py-1 px-2 text-xs font-medium text-primary-600 border border-primary-400 rounded-lg hover:bg-primary-50 disabled:opacity-50 shrink-0 cursor-pointer';
 
-function slotUploading(
-  active: InlineImageSlot | null,
-  kind: InlineImageSlot['kind'],
-  index: number
-): boolean {
-  return active !== null && active.kind === kind && active.index === index;
+type VisHoleRow = { name: string; hole: NumericInputValue; spacing: NumericInputValue; thumbnail: string };
+type VisTextureRow = { name: string; image: string; profiles: VisHoleRow[] };
+
+function normalizeVisTextures(raw?: VisualizerTexture[]): VisTextureRow[] {
+  if (!raw?.length) return [];
+  return raw.map((t) => ({
+    name: t.name ?? '',
+    image: t.image ?? '',
+    profiles:
+      Array.isArray(t.profiles) && t.profiles.length > 0
+        ? t.profiles.map((p: VisualizerHoleProfile) => ({
+            name: p.name ?? '',
+            hole: typeof p.hole === 'number' && Number.isFinite(p.hole) ? p.hole : 8,
+            spacing: typeof p.spacing === 'number' && Number.isFinite(p.spacing) ? p.spacing : 16,
+            thumbnail: p.thumbnail?.trim() ?? '',
+          }))
+        : [{ name: 'Profile 1', hole: 8, spacing: 16, thumbnail: '' }],
+  }));
+}
+
+function slotUploading(active: InlineImageSlot | null, match: InlineImageSlot): boolean {
+  if (!active || active.kind !== match.kind) return false;
+  if (match.kind === 'visualizerHoleThumb') {
+    return (
+      active.kind === 'visualizerHoleThumb' &&
+      active.textureIndex === match.textureIndex &&
+      active.profileIndex === match.profileIndex
+    );
+  }
+  if (match.kind === 'visualizerTexture') {
+    return active.kind === 'visualizerTexture' && active.textureIndex === match.textureIndex;
+  }
+  return 'index' in active && 'index' in match && active.index === match.index;
 }
 
 function SectionHeading({ children }: { children: React.ReactNode }) {
@@ -79,8 +116,11 @@ function ProductForm({
   const [description, setDescription] = useState(initial?.description ?? '');
   const [image, setImage] = useState(initial?.image ?? '');
   const [heroImage, setHeroImage] = useState(initial?.heroImage ?? '');
+  const [brochureUrl, setBrochureUrl] = useState(initial?.brochureUrl ?? '');
+  const [brochureUploading, setBrochureUploading] = useState(false);
+  const brochureFileRef = useRef<HTMLInputElement>(null);
   const [categorySlug, setCategorySlug] = useState(initial?.categorySlug ?? '');
-  const [order, setOrder] = useState(initial?.order ?? 0);
+  const [order, setOrder] = useState<NumericInputValue>(initial?.order ?? 0);
   const [metaTitle, setMetaTitle] = useState(initial?.metaTitle ?? '');
   const [metaDescription, setMetaDescription] = useState(initial?.metaDescription ?? '');
 
@@ -141,10 +181,15 @@ function ProductForm({
   );
   const [finishItems, setFinishItems] = useState<FinishItem[]>(initial?.finishesSection?.items ?? []);
 
-  const [visWidth, setVisWidth] = useState<VisualizerDimensions['width']>(initial?.visualizerDimensions?.width ?? 120);
-  const [visHeight, setVisHeight] = useState<VisualizerDimensions['height']>(initial?.visualizerDimensions?.height ?? 60);
-  const [visDepth, setVisDepth] = useState<VisualizerDimensions['depth']>(initial?.visualizerDimensions?.depth ?? 4);
-  const [visTextures, setVisTextures] = useState<VisualizerTexture[]>(initial?.visualizerTextures ?? []);
+  const [visW, setVisW] = useState<NumericInputValue>(initial?.visualizerDimensions?.width ?? 120);
+  const [visH, setVisH] = useState<NumericInputValue>(initial?.visualizerDimensions?.height ?? 60);
+  const [visD, setVisD] = useState<NumericInputValue>(initial?.visualizerDimensions?.depth ?? 4);
+  const [visTitle, setVisTitle] = useState(initial?.visualizerTitle ?? '');
+  const [visDesc, setVisDesc] = useState(initial?.visualizerDescription ?? '');
+  const [visTechnical, setVisTechnical] = useState(initial?.visualizerTechnicalCaption ?? '');
+  const [visTextures, setVisTextures] = useState<VisTextureRow[]>(() =>
+    normalizeVisTextures(initial?.visualizerTextures)
+  );
 
   const addSpec = () => setSpecs((prev) => [...prev, { label: '', value: '' }]);
   const updateSpec = (i: number, field: 'label' | 'value', value: string) => {
@@ -224,17 +269,29 @@ function ProductForm({
             return next;
           });
           break;
-        case 'visualizer':
+        case 'visualizerTexture':
           setVisTextures((prev) => {
             const next = [...prev];
-            if (next[slot.index]) {
-              const currentName = next[slot.index].name?.trim();
-              next[slot.index] = { 
-                ...next[slot.index], 
+            const i = slot.textureIndex;
+            if (next[i]) {
+              const currentName = next[i].name?.trim();
+              next[i] = {
+                ...next[i],
                 image: url,
-                name: currentName || `Material ${slot.index + 1}`
+                name: currentName || `Material ${i + 1}`,
               };
             }
+            return next;
+          });
+          break;
+        case 'visualizerHoleThumb':
+          setVisTextures((prev) => {
+            const next = [...prev];
+            const t = next[slot.textureIndex];
+            if (!t?.profiles[slot.profileIndex]) return prev;
+            const profiles = [...t.profiles];
+            profiles[slot.profileIndex] = { ...profiles[slot.profileIndex], thumbnail: url };
+            next[slot.textureIndex] = { ...t, profiles };
             return next;
           });
           break;
@@ -279,8 +336,16 @@ function ProductForm({
   };
   const removeFinish = (i: number) => setFinishItems((prev) => prev.filter((_, idx) => idx !== i));
 
-  const addVisTexture = () => setVisTextures((prev) => [...prev, { name: '', image: '' }]);
-  const updateVisTexture = (i: number, field: keyof VisualizerTexture, value: string) => {
+  const addVisTexture = () =>
+    setVisTextures((prev) => [
+      ...prev,
+      {
+        name: '',
+        image: '',
+        profiles: [{ name: 'Profile 1', hole: 8, spacing: 16, thumbnail: '' }],
+      },
+    ]);
+  const updateVisTexture = (i: number, field: 'name' | 'image', value: string) => {
     setVisTextures((prev) => {
       const next = [...prev];
       next[i] = { ...next[i], [field]: value };
@@ -288,6 +353,47 @@ function ProductForm({
     });
   };
   const removeVisTexture = (i: number) => setVisTextures((prev) => prev.filter((_, idx) => idx !== i));
+
+  const addHoleProfile = (textureIndex: number) => {
+    setVisTextures((prev) => {
+      const next = [...prev];
+      const t = next[textureIndex];
+      if (!t) return prev;
+      next[textureIndex] = {
+        ...t,
+        profiles: [...t.profiles, { name: '', hole: 8, spacing: 16, thumbnail: '' }],
+      };
+      return next;
+    });
+  };
+  const updateHoleProfile = (
+    textureIndex: number,
+    profileIndex: number,
+    field: keyof VisHoleRow,
+    value: string | number
+  ) => {
+    setVisTextures((prev) => {
+      const next = [...prev];
+      const t = next[textureIndex];
+      if (!t?.profiles[profileIndex]) return prev;
+      const profiles = [...t.profiles];
+      profiles[profileIndex] = { ...profiles[profileIndex], [field]: value } as VisHoleRow;
+      next[textureIndex] = { ...t, profiles };
+      return next;
+    });
+  };
+  const removeHoleProfile = (textureIndex: number, profileIndex: number) => {
+    setVisTextures((prev) => {
+      const next = [...prev];
+      const t = next[textureIndex];
+      if (!t || t.profiles.length <= 1) return prev;
+      next[textureIndex] = {
+        ...t,
+        profiles: t.profiles.filter((_, j) => j !== profileIndex),
+      };
+      return next;
+    });
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -334,14 +440,37 @@ function ProductForm({
       }))
       .filter((c) => c.name && c.image);
 
+    const visualizerTexturesPayload = visTextures
+      .map((vt) => ({
+        name: vt.name.trim(),
+        image: vt.image.trim(),
+        profiles: vt.profiles
+          .map((p) => ({
+            name: p.name.trim(),
+            hole: Number(p.hole),
+            spacing: Number(p.spacing),
+            thumbnail: p.thumbnail.trim() || undefined,
+          }))
+          .filter(
+            (p) =>
+              p.name &&
+              Number.isFinite(p.hole) &&
+              p.hole > 0 &&
+              Number.isFinite(p.spacing) &&
+              p.spacing > 0
+          ),
+      }))
+      .filter((vt) => vt.name && vt.image && vt.profiles.length > 0);
+
     const body: CreateProductBody = {
       slug: resolvedSlug,
       title: title.trim(),
       description: description.trim(),
       image: image.trim(),
       heroImage: heroImage.trim() || undefined,
+      brochureUrl: brochureUrl.trim() || undefined,
       categorySlug: categorySlug.trim() || undefined,
-      order,
+      order: typeof order === 'number' ? order : 0,
       shortDescription: shortDescription.trim() || undefined,
       metaTitle: metaTitle.trim() || undefined,
       metaDescription: metaDescription.trim() || undefined,
@@ -380,13 +509,14 @@ function ProductForm({
       }),
       certifications: certificationsClean,
       visualizerDimensions: {
-        width: visWidth,
-        height: visHeight,
-        depth: visDepth,
+        width: Number(visW) > 0 ? Number(visW) : 120,
+        height: Number(visH) > 0 ? Number(visH) : 60,
+        depth: Number(visD) > 0 ? Number(visD) : 4,
       },
-      visualizerTextures: visTextures
-        .map((vt) => ({ name: vt.name.trim(), image: vt.image.trim() }))
-        .filter((vt) => vt.name && vt.image),
+      visualizerTitle: visTitle.trim() || undefined,
+      visualizerDescription: visDesc.trim() || undefined,
+      visualizerTechnicalCaption: visTechnical.trim() || undefined,
+      visualizerTextures: visualizerTexturesPayload,
     };
 
     if (profilesSectionRef.current) {
@@ -483,6 +613,58 @@ function ProductForm({
           value={heroImage}
           onChange={setHeroImage}
         />
+        <div>
+          <span className={labelClass}>Brochure PDF (optional)</span>
+          <p className="m-0 mb-2 text-xs text-gray-500">
+            Shown as &quot;Download brochure&quot; on the product page. Upload a PDF or paste a URL.
+          </p>
+          <input
+            ref={brochureFileRef}
+            type="file"
+            accept="application/pdf"
+            className="hidden"
+            onChange={async (e) => {
+              const file = e.target.files?.[0];
+              e.target.value = '';
+              if (!file || file.type !== 'application/pdf') return;
+              setBrochureUploading(true);
+              try {
+                const { url } = await uploadDocument(file);
+                setBrochureUrl(url);
+              } catch (err) {
+                alert(err instanceof Error ? err.message : 'Upload failed');
+              } finally {
+                setBrochureUploading(false);
+              }
+            }}
+          />
+          <div className="flex flex-wrap gap-2 items-center">
+            <input
+              type="url"
+              value={brochureUrl}
+              onChange={(e) => setBrochureUrl(e.target.value)}
+              placeholder="https://…"
+              className={`${inputClass} flex-1 min-w-[200px]`}
+            />
+            <button
+              type="button"
+              disabled={brochureUploading}
+              onClick={() => brochureFileRef.current?.click()}
+              className={inlineUploadBtnClass}
+            >
+              {brochureUploading ? 'Uploading…' : 'Upload PDF'}
+            </button>
+            {brochureUrl.trim() ? (
+              <button
+                type="button"
+                onClick={() => setBrochureUrl('')}
+                className="text-xs text-gray-500 hover:text-red-600"
+              >
+                Clear
+              </button>
+            ) : null}
+          </div>
+        </div>
 
         <SectionHeading>Category & order</SectionHeading>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -506,7 +688,7 @@ function ProductForm({
             <input
               type="number"
               value={order}
-              onChange={(e) => setOrder(Number(e.target.value) || 0)}
+              onChange={(e) => setOrder(parseNumericInput(e.target.value))}
               className={inputClass}
             />
           </label>
@@ -603,7 +785,7 @@ function ProductForm({
                   disabled={uploadingSlot !== null}
                   className={inlineUploadBtnClass}
                 >
-                  {slotUploading(uploadingSlot, 'certification', i) ? '…' : 'Upload'}
+                  {slotUploading(uploadingSlot, { kind: 'certification', index: i }) ? '…' : 'Upload'}
                 </button>
                 <input
                   type="url"
@@ -685,7 +867,7 @@ function ProductForm({
                   disabled={uploadingSlot !== null}
                   className={inlineUploadBtnClass}
                 >
-                  {slotUploading(uploadingSlot, 'substrate', i) ? '…' : 'Upload'}
+                  {slotUploading(uploadingSlot, { kind: 'substrate', index: i }) ? '…' : 'Upload'}
                 </button>
                 <input
                   placeholder="Image URL"
@@ -779,7 +961,7 @@ function ProductForm({
                   disabled={uploadingSlot !== null}
                   className={inlineUploadBtnClass}
                 >
-                  {slotUploading(uploadingSlot, 'finish', i) ? '…' : 'Upload'}
+                  {slotUploading(uploadingSlot, { kind: 'finish', index: i }) ? '…' : 'Upload'}
                 </button>
                 <input
                   placeholder="Image URL"
@@ -808,84 +990,205 @@ function ProductForm({
 
         <SectionHeading>3D Visualizer</SectionHeading>
         <p className="m-0 mb-2 text-xs text-gray-500 leading-relaxed">
-          Textures are shown on the product page 3D preview. Use Upload (ImageKit) or paste an HTTPS image URL.
-          The public site loads textures through your API proxy so WebGL can render them (CORS). Default allowed
-          host is ImageKit (<span className="font-mono">ik.imagekit.io</span>); for other CDNs set{' '}
-          <span className="font-mono">TEXTURE_PROXY_ALLOWED_HOSTS</span> on the API server (comma-separated hosts).
+          Upload each surface texture and define one or more perforation profiles (hole diameter and spacing in
+          mm) for that texture. The storefront shows only what you configure here—no client-side hole sliders or
+          uploads. Images load through your API texture proxy for WebGL (CORS); configure{' '}
+          <span className="font-mono">TEXTURE_PROXY_ALLOWED_HOSTS</span> for non–ImageKit hosts.
         </p>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <label>
+          <span className={labelClass}>Section title (public)</span>
+          <input
+            type="text"
+            value={visTitle}
+            onChange={(e) => setVisTitle(e.target.value)}
+            placeholder="Product Profiles"
+            className={inputClass}
+          />
+        </label>
+        <label>
+          <span className={labelClass}>Section description (public)</span>
+          <textarea
+            value={visDesc}
+            onChange={(e) => setVisDesc(e.target.value)}
+            rows={2}
+            className={`${inputClass} resize-y`}
+          />
+        </label>
+        <label>
+          <span className={labelClass}>Technical hint under canvas (optional)</span>
+          <input
+            type="text"
+            value={visTechnical}
+            onChange={(e) => setVisTechnical(e.target.value)}
+            placeholder="Drag to rotate · scroll or +/- to zoom"
+            className={inputClass}
+          />
+        </label>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-2">
           <label>
-            <span className={labelClass}>Default Width (cm)</span>
+            <span className={labelClass}>Panel width (cm)</span>
             <input
               type="number"
-              value={visWidth}
-              onChange={(e) => setVisWidth(Number(e.target.value) || 0)}
+              min={1}
+              value={visW}
+              onChange={(e) => setVisW(parseNumericInput(e.target.value))}
               className={inputClass}
             />
           </label>
           <label>
-            <span className={labelClass}>Default Height (cm)</span>
+            <span className={labelClass}>Panel height (cm)</span>
             <input
               type="number"
-              value={visHeight}
-              onChange={(e) => setVisHeight(Number(e.target.value) || 0)}
+              min={1}
+              value={visH}
+              onChange={(e) => setVisH(parseNumericInput(e.target.value))}
               className={inputClass}
             />
           </label>
           <label>
-            <span className={labelClass}>Default Depth (cm)</span>
+            <span className={labelClass}>Panel depth (cm)</span>
             <input
               type="number"
-              value={visDepth}
-              onChange={(e) => setVisDepth(Number(e.target.value) || 0)}
+              min={1}
+              value={visD}
+              onChange={(e) => setVisD(parseNumericInput(e.target.value))}
               className={inputClass}
             />
           </label>
         </div>
-        <div>
-          <div className="flex justify-between items-center mb-1 mt-2">
-            <span className={labelClass}>Textures / Swatches</span>
-            <button type="button" onClick={addVisTexture} className="text-xs text-primary-600 hover:underline">
-              + Add texture
-            </button>
-          </div>
-          {visTextures.map((vt, i) => (
-            <div key={i} className="grid grid-cols-1 md:grid-cols-3 gap-2 mb-2 items-start">
+        <div className="flex justify-between items-center mb-1 mt-2">
+          <span className={labelClass}>Textures (each with its own perforation profiles)</span>
+          <button type="button" onClick={addVisTexture} className="text-xs text-primary-600 hover:underline">
+            + Add texture
+          </button>
+        </div>
+        {visTextures.map((vt, ti) => (
+          <div
+            key={ti}
+            className="mb-4 rounded-lg border border-gray-200 bg-gray-50/80 p-3 space-y-3"
+          >
+            <div className="flex flex-wrap gap-2 items-start justify-between">
               <input
-                placeholder="Name (e.g. Oak)"
+                placeholder="Material name"
                 value={vt.name}
-                onChange={(e) => updateVisTexture(i, 'name', e.target.value)}
-                className={`${inputClass} text-sm`}
+                onChange={(e) => updateVisTexture(ti, 'name', e.target.value)}
+                className={`${inputClass} text-sm flex-1 min-w-[140px]`}
               />
-              <div className="flex gap-1 items-center flex-wrap min-w-0">
-                {vt.image ? (
-                  <img src={vt.image} alt="" className="h-10 w-10 rounded object-cover border border-gray-300 shrink-0" />
-                ) : null}
-                <button
-                  type="button"
-                  onClick={() => openInlineImagePicker({ kind: 'visualizer', index: i })}
-                  disabled={uploadingSlot !== null}
-                  className={inlineUploadBtnClass}
-                >
-                  {slotUploading(uploadingSlot, 'visualizer', i) ? '…' : 'Upload'}
-                </button>
-                <input
-                  placeholder="Image URL"
-                  value={vt.image}
-                  onChange={(e) => updateVisTexture(i, 'image', e.target.value)}
-                  className={`${inputClass} text-sm flex-1 min-w-0`}
-                />
-              </div>
-              <button
-                type="button"
-                onClick={() => removeVisTexture(i)}
-                className={`${deleteBtnClass} mt-1`}
-              >
-                Remove
+              <button type="button" onClick={() => removeVisTexture(ti)} className={deleteBtnClass}>
+                Remove texture
               </button>
             </div>
-          ))}
-        </div>
+            <div className="flex gap-2 items-center flex-wrap">
+              {vt.image ? (
+                <img
+                  src={vt.image}
+                  alt=""
+                  className="h-14 w-14 rounded object-cover border border-gray-300 shrink-0"
+                />
+              ) : null}
+              <button
+                type="button"
+                onClick={() => openInlineImagePicker({ kind: 'visualizerTexture', textureIndex: ti })}
+                disabled={uploadingSlot !== null}
+                className={inlineUploadBtnClass}
+              >
+                {slotUploading(uploadingSlot, { kind: 'visualizerTexture', textureIndex: ti }) ? '…' : 'Upload'}
+              </button>
+              <input
+                placeholder="Texture image URL"
+                value={vt.image}
+                onChange={(e) => updateVisTexture(ti, 'image', e.target.value)}
+                className={`${inputClass} text-sm flex-1 min-w-0`}
+              />
+            </div>
+            <div>
+              <div className="flex justify-between items-center mb-1">
+                <span className="text-xs font-medium text-gray-600">Perforation profiles for this texture (mm)</span>
+                <button
+                  type="button"
+                  onClick={() => addHoleProfile(ti)}
+                  className="text-xs text-primary-600 hover:underline"
+                >
+                  + Add profile
+                </button>
+              </div>
+              {vt.profiles.map((hp, pi) => (
+                <div
+                  key={pi}
+                  className="grid grid-cols-1 md:grid-cols-12 gap-2 mb-2 items-start border-t border-gray-200 pt-2 first:border-t-0 first:pt-0"
+                >
+                  <input
+                    placeholder="Label (e.g. 1.5/8x8)"
+                    value={hp.name}
+                    onChange={(e) => updateHoleProfile(ti, pi, 'name', e.target.value)}
+                    className={`${inputClass} text-sm md:col-span-3`}
+                  />
+                  <input
+                    type="number"
+                    placeholder="Hole Ø (mm)"
+                    min={0.5}
+                    step={0.5}
+                    value={hp.hole}
+                    onChange={(e) =>
+                      updateHoleProfile(ti, pi, 'hole', parseNumericInput(e.target.value))
+                    }
+                    className={`${inputClass} text-sm md:col-span-2`}
+                  />
+                  <input
+                    type="number"
+                    placeholder="Spacing (mm)"
+                    min={1}
+                    step={1}
+                    value={hp.spacing}
+                    onChange={(e) =>
+                      updateHoleProfile(ti, pi, 'spacing', parseNumericInput(e.target.value))
+                    }
+                    className={`${inputClass} text-sm md:col-span-2`}
+                  />
+                  <div className="flex gap-1 items-center md:col-span-4 flex-wrap min-w-0">
+                    {hp.thumbnail ? (
+                      <img
+                        src={hp.thumbnail}
+                        alt=""
+                        className="h-10 w-10 rounded object-cover border border-gray-300 shrink-0"
+                      />
+                    ) : null}
+                    <button
+                      type="button"
+                      onClick={() =>
+                        openInlineImagePicker({ kind: 'visualizerHoleThumb', textureIndex: ti, profileIndex: pi })
+                      }
+                      disabled={uploadingSlot !== null}
+                      className={inlineUploadBtnClass}
+                    >
+                      {slotUploading(uploadingSlot, {
+                        kind: 'visualizerHoleThumb',
+                        textureIndex: ti,
+                        profileIndex: pi,
+                      })
+                        ? '…'
+                        : 'Thumb'}
+                    </button>
+                    <input
+                      placeholder="Profile thumb URL (optional)"
+                      value={hp.thumbnail}
+                      onChange={(e) => updateHoleProfile(ti, pi, 'thumbnail', e.target.value)}
+                      className={`${inputClass} text-sm flex-1 min-w-0`}
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => removeHoleProfile(ti, pi)}
+                    disabled={vt.profiles.length <= 1}
+                    className={`${deleteBtnClass} md:col-span-1 justify-self-end`}
+                  >
+                    Remove
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
 
         <SectionHeading>Gallery</SectionHeading>
         <div>
@@ -910,7 +1213,7 @@ function ProductForm({
                 disabled={uploadingSlot !== null}
                 className={inlineUploadBtnClass}
               >
-                {slotUploading(uploadingSlot, 'gallery', i) ? '…' : 'Upload'}
+                {slotUploading(uploadingSlot, { kind: 'gallery', index: i }) ? '…' : 'Upload'}
               </button>
               <input
                 placeholder="Image URL"
@@ -1038,7 +1341,7 @@ export default function Products() {
           setSaveError(null);
         }}
         title="Add product"
-        maxWidth="max-w-2xl"
+        maxWidth="max-w-4xl"
       >
         <ProductForm
           product={null}
@@ -1060,7 +1363,7 @@ export default function Products() {
           setSaveError(null);
         }}
         title={editing ? `Edit: ${editing.title}` : ''}
-        maxWidth="max-w-2xl"
+        maxWidth="max-w-4xl"
       >
         {editing && (
           <ProductForm

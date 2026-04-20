@@ -92,3 +92,24 @@ export async function uploadImage(file: File): Promise<UploadImageResponse> {
 
   return uploadViaBackendProxy(prepared);
 }
+
+/** Upload a PDF (e.g. product brochure) via the API proxy to ImageKit. */
+export async function uploadDocument(file: File): Promise<UploadImageResponse> {
+  if (file.type !== 'application/pdf') {
+    throw new Error('Only PDF files are allowed');
+  }
+  const token = getToken();
+  const form = new FormData();
+  form.append('file', file);
+  const res = await fetch(`${getBaseUrl()}/api/admin/upload-document`, {
+    method: 'POST',
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    body: form,
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const message = (body as { error?: string }).error ?? res.statusText;
+    throw new Error(message);
+  }
+  return body as UploadImageResponse;
+}
