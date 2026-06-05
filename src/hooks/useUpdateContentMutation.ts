@@ -12,7 +12,7 @@ export function useUpdateContentMutation() {
     }: {
       key: string;
       value: string;
-      type?: 'text' | 'image';
+      type?: 'text' | 'image' | 'video';
     }) => updateContent(key, { value, type }),
     onSuccess: () => {
       client.invalidateQueries({ queryKey: ['admin', 'content'] });

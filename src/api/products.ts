@@ -6,25 +6,34 @@ export interface SubProductSpec {
   value: string;
 }
 
-/** Perforation pattern for one uploaded texture (mm). */
+/** Image + label within one 3D visualizer item. */
+export interface VisualizerItemProfile {
+  name: string;
+  image: string;
+}
+
+/** One 3D visualizer entry — thumbnail + GLB. */
+export interface VisualizerItem {
+  name: string;
+  thumbnail: string;
+  glb: string;
+  description?: string;
+  profiles?: VisualizerItemProfile[];
+}
+
+/** Legacy — used when loading old products in admin. */
 export interface VisualizerHoleProfile {
   name: string;
   hole: number;
   spacing: number;
   thumbnail?: string;
+  glb?: string;
 }
 
-/** Admin-uploaded texture with nested hole profiles. */
 export interface VisualizerTexture {
   name: string;
   image: string;
   profiles: VisualizerHoleProfile[];
-}
-
-export interface VisualizerDimensions {
-  width: number;
-  height: number;
-  depth: number;
 }
 
 export interface SubProductGallerySlide {
@@ -116,11 +125,11 @@ export interface ProductItem {
   certificationsSectionDescription?: string;
   certifications?: SubProductCertification[];
   finishesSection?: SubProductFinishesSection;
-  visualizerTextures?: VisualizerTexture[];
-  visualizerDimensions?: VisualizerDimensions;
   visualizerTitle?: string;
   visualizerDescription?: string;
-  visualizerTechnicalCaption?: string;
+  visualizerItems?: VisualizerItem[];
+  /** @deprecated Legacy nested format — migrated on load */
+  visualizerTextures?: VisualizerTexture[];
   createdAt?: string;
   updatedAt?: string;
 }

@@ -13,8 +13,8 @@ import {
   type SubProductAboutTab,
   type SubProductFinishesSection,
   type SubProductCertification,
+  type VisualizerItem,
   type VisualizerTexture,
-  type VisualizerHoleProfile,
 } from '../api/products';
 import { useQueryClient } from '@tanstack/react-query';
 import type { CategoryItem } from '../api/categories';
@@ -24,15 +24,15 @@ import { inputClass, labelClass, cancelBtnClass, deleteBtnClass } from '../lib/s
 import PageShell from '../components/PageShell';
 import { EmptyState, ErrorState, InlineLoader } from '../components/EmptyState';
 import { slugify } from '../lib/slugify';
-import { uploadDocument, uploadImage } from '../api/upload';
+import { uploadDocument, uploadImage, uploadModel } from '../api/upload';
 
 type InlineImageSlot =
   | { kind: 'certification'; index: number }
   | { kind: 'substrate'; index: number }
   | { kind: 'finish'; index: number }
   | { kind: 'gallery'; index: number }
-  | { kind: 'visualizerTexture'; textureIndex: number }
-  | { kind: 'visualizerHoleThumb'; textureIndex: number; profileIndex: number };
+  | { kind: 'visualizerThumb'; index: number }
+  | { kind: 'visualizerProfileImage'; itemIndex: number; profileIndex: number };
 
 type NumericInputValue = number | '';
 
@@ -43,40 +43,62 @@ function parseNumericInput(value: string): NumericInputValue {
   return Number.isFinite(n) ? n : '';
 }
 
+/** Coerce API/form values to trimmed strings (avoids .trim() on undefined). */
+function str(value: unknown): string {
+  if (value == null) return '';
+  return String(value).trim();
+}
+
 const inlineUploadBtnClass =
   'py-1 px-2 text-xs font-medium text-primary-600 border border-primary-400 rounded-lg hover:bg-primary-50 disabled:opacity-50 shrink-0 cursor-pointer';
 
-type VisHoleRow = { name: string; hole: NumericInputValue; spacing: NumericInputValue; thumbnail: string };
-type VisTextureRow = { name: string; image: string; profiles: VisHoleRow[] };
+type VisProfileRow = { name: string; image: string };
+type VisItemRow = {
+  name: string;
+  thumbnail: string;
+  glb: string;
+  description: string;
+  profiles: VisProfileRow[];
+};
 
-function normalizeVisTextures(raw?: VisualizerTexture[]): VisTextureRow[] {
-  if (!raw?.length) return [];
-  return raw.map((t) => ({
-    name: t.name ?? '',
-    image: t.image ?? '',
-    profiles:
-      Array.isArray(t.profiles) && t.profiles.length > 0
-        ? t.profiles.map((p: VisualizerHoleProfile) => ({
-            name: p.name ?? '',
-            hole: typeof p.hole === 'number' && Number.isFinite(p.hole) ? p.hole : 8,
-            spacing: typeof p.spacing === 'number' && Number.isFinite(p.spacing) ? p.spacing : 16,
-            thumbnail: p.thumbnail?.trim() ?? '',
-          }))
-        : [{ name: 'Profile 1', hole: 8, spacing: 16, thumbnail: '' }],
-  }));
+function normalizeVisItems(
+  items?: VisualizerItem[],
+  legacy?: VisualizerTexture[]
+): VisItemRow[] {
+  if (items?.length) {
+    return items.map((i) => ({
+      name: i.name ?? '',
+      thumbnail: i.thumbnail ?? '',
+      glb: i.glb ?? '',
+      description: i.description ?? '',
+      profiles: (i.profiles ?? []).map((p) => ({
+        name: p.name ?? '',
+        image: p.image ?? '',
+      })),
+    }));
+  }
+  if (legacy?.length) {
+    return legacy.flatMap((t) =>
+      (t.profiles ?? []).map((p) => ({
+        name: p.name?.trim() || t.name?.trim() || '',
+        thumbnail: p.thumbnail?.trim() || t.image?.trim() || '',
+        glb: p.glb?.trim() || '',
+        description: '',
+        profiles: [],
+      }))
+    );
+  }
+  return [];
 }
 
 function slotUploading(active: InlineImageSlot | null, match: InlineImageSlot): boolean {
   if (!active || active.kind !== match.kind) return false;
-  if (match.kind === 'visualizerHoleThumb') {
+  if (match.kind === 'visualizerProfileImage') {
     return (
-      active.kind === 'visualizerHoleThumb' &&
-      active.textureIndex === match.textureIndex &&
+      active.kind === 'visualizerProfileImage' &&
+      active.itemIndex === match.itemIndex &&
       active.profileIndex === match.profileIndex
     );
-  }
-  if (match.kind === 'visualizerTexture') {
-    return active.kind === 'visualizerTexture' && active.textureIndex === match.textureIndex;
   }
   return 'index' in active && 'index' in match && active.index === match.index;
 }
@@ -126,7 +148,9 @@ function ProductForm({
 
   const [specSectionTitle, setSpecSectionTitle] = useState(initial?.specSectionTitle ?? '');
   const [specDescription, setSpecDescription] = useState(initial?.specDescription ?? '');
-  const [specs, setSpecs] = useState<SubProductSpec[]>(initial?.specs ?? []);
+  const [specs, setSpecs] = useState<SubProductSpec[]>(
+    () => (initial?.specs ?? []).map((s) => ({ label: s.label ?? '', value: s.value ?? '' }))
+  );
   const [certificationsSectionTitle, setCertificationsSectionTitle] = useState(
     initial?.certificationsSectionTitle ?? ''
   );
@@ -134,18 +158,33 @@ function ProductForm({
     initial?.certificationsSectionDescription ?? ''
   );
   const [certificationItems, setCertificationItems] = useState<SubProductCertification[]>(
-    initial?.certifications ?? []
+    () =>
+      (initial?.certifications ?? []).map((c) => ({
+        name: c.name ?? '',
+        image: c.image ?? '',
+        description: c.description ?? '',
+      }))
   );
-  const [galleryImages, setGalleryImages] = useState<SubProductGalleryImage[]>(
-    initial?.galleryImages ??
+  const [galleryImages, setGalleryImages] = useState<SubProductGalleryImage[]>(() => {
+    const raw =
+      initial?.galleryImages ??
       (initial?.gallerySlides?.length
-        ? initial.gallerySlides.flatMap((s) => [{ url: s.large }, { url: s.small }]).filter((x) => !!x.url)
-        : [])
-  );
+        ? initial.gallerySlides.flatMap((s) => [
+            { url: s.large ?? '', alt: '' },
+            { url: s.small ?? '', alt: '' },
+          ])
+        : []);
+    return raw
+      .map((g) => ({ url: g.url ?? '', alt: g.alt ?? '' }))
+      .filter((g) => g.url);
+  });
 
   const inlineFileRef = useRef<HTMLInputElement>(null);
+  const glbFileRef = useRef<HTMLInputElement>(null);
   const pendingInlineSlotRef = useRef<InlineImageSlot | null>(null);
+  const pendingGlbIndexRef = useRef<number | null>(null);
   const [uploadingSlot, setUploadingSlot] = useState<InlineImageSlot | null>(null);
+  const [uploadingGlbIndex, setUploadingGlbIndex] = useState<number | null>(null);
 
   type SubstrateItem = NonNullable<SubProductSubstratesSection['items']>[number];
   const [substratesTitle, setSubstratesTitle] = useState(initial?.substratesSection?.title ?? '');
@@ -153,7 +192,13 @@ function ProductForm({
     initial?.substratesSection?.description ?? ''
   );
   const [substrateItems, setSubstrateItems] = useState<SubstrateItem[]>(
-    initial?.substratesSection?.items ?? []
+    () =>
+      (initial?.substratesSection?.items ?? []).map((s) => ({
+        name: s.name ?? '',
+        thickness: s.thickness ?? '',
+        description: s.description ?? '',
+        image: s.image ?? '',
+      }))
   );
 
   const aboutTabDefs: Array<Pick<SubProductAboutTab, 'key' | 'title'>> = [
@@ -179,16 +224,19 @@ function ProductForm({
   const [finishesDescription, setFinishesDescription] = useState(
     initial?.finishesSection?.description ?? ''
   );
-  const [finishItems, setFinishItems] = useState<FinishItem[]>(initial?.finishesSection?.items ?? []);
+  const [finishItems, setFinishItems] = useState<FinishItem[]>(
+    () =>
+      (initial?.finishesSection?.items ?? []).map((f) => ({
+        name: f.name ?? '',
+        description: f.description ?? '',
+        image: f.image ?? '',
+      }))
+  );
 
-  const [visW, setVisW] = useState<NumericInputValue>(initial?.visualizerDimensions?.width ?? 120);
-  const [visH, setVisH] = useState<NumericInputValue>(initial?.visualizerDimensions?.height ?? 60);
-  const [visD, setVisD] = useState<NumericInputValue>(initial?.visualizerDimensions?.depth ?? 4);
   const [visTitle, setVisTitle] = useState(initial?.visualizerTitle ?? '');
   const [visDesc, setVisDesc] = useState(initial?.visualizerDescription ?? '');
-  const [visTechnical, setVisTechnical] = useState(initial?.visualizerTechnicalCaption ?? '');
-  const [visTextures, setVisTextures] = useState<VisTextureRow[]>(() =>
-    normalizeVisTextures(initial?.visualizerTextures)
+  const [visItems, setVisItems] = useState<VisItemRow[]>(() =>
+    normalizeVisItems(initial?.visualizerItems, initial?.visualizerTextures)
   );
 
   const addSpec = () => setSpecs((prev) => [...prev, { label: '', value: '' }]);
@@ -269,29 +317,23 @@ function ProductForm({
             return next;
           });
           break;
-        case 'visualizerTexture':
-          setVisTextures((prev) => {
+        case 'visualizerThumb':
+          setVisItems((prev) => {
             const next = [...prev];
-            const i = slot.textureIndex;
-            if (next[i]) {
-              const currentName = next[i].name?.trim();
-              next[i] = {
-                ...next[i],
-                image: url,
-                name: currentName || `Material ${i + 1}`,
-              };
+            if (next[slot.index]) {
+              next[slot.index] = { ...next[slot.index], thumbnail: url };
             }
             return next;
           });
           break;
-        case 'visualizerHoleThumb':
-          setVisTextures((prev) => {
+        case 'visualizerProfileImage':
+          setVisItems((prev) => {
             const next = [...prev];
-            const t = next[slot.textureIndex];
-            if (!t?.profiles[slot.profileIndex]) return prev;
-            const profiles = [...t.profiles];
-            profiles[slot.profileIndex] = { ...profiles[slot.profileIndex], thumbnail: url };
-            next[slot.textureIndex] = { ...t, profiles };
+            const item = next[slot.itemIndex];
+            if (!item?.profiles[slot.profileIndex]) return prev;
+            const profiles = [...item.profiles];
+            profiles[slot.profileIndex] = { ...profiles[slot.profileIndex], image: url };
+            next[slot.itemIndex] = { ...item, profiles };
             return next;
           });
           break;
@@ -300,6 +342,35 @@ function ProductForm({
       alert(err instanceof Error ? err.message : 'Upload failed');
     } finally {
       setUploadingSlot(null);
+    }
+  };
+
+  const openGlbPicker = (index: number) => {
+    pendingGlbIndexRef.current = index;
+    glbFileRef.current?.click();
+  };
+
+  const handleGlbFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    const index = pendingGlbIndexRef.current;
+    pendingGlbIndexRef.current = null;
+    if (!file || index === null) return;
+
+    setUploadingGlbIndex(index);
+    try {
+      const { url } = await uploadModel(file);
+      setVisItems((prev) => {
+        const next = [...prev];
+        if (next[index]) {
+          next[index] = { ...next[index], glb: url };
+        }
+        return next;
+      });
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'GLB upload failed');
+    } finally {
+      setUploadingGlbIndex(null);
     }
   };
 
@@ -336,60 +407,56 @@ function ProductForm({
   };
   const removeFinish = (i: number) => setFinishItems((prev) => prev.filter((_, idx) => idx !== i));
 
-  const addVisTexture = () =>
-    setVisTextures((prev) => [
+  const addVisItem = () =>
+    setVisItems((prev) => [
       ...prev,
-      {
-        name: '',
-        image: '',
-        profiles: [{ name: 'Profile 1', hole: 8, spacing: 16, thumbnail: '' }],
-      },
+      { name: '', thumbnail: '', glb: '', description: '', profiles: [] },
     ]);
-  const updateVisTexture = (i: number, field: 'name' | 'image', value: string) => {
-    setVisTextures((prev) => {
+  const updateVisItem = <K extends keyof VisItemRow>(i: number, field: K, value: VisItemRow[K]) => {
+    setVisItems((prev) => {
       const next = [...prev];
       next[i] = { ...next[i], [field]: value };
       return next;
     });
   };
-  const removeVisTexture = (i: number) => setVisTextures((prev) => prev.filter((_, idx) => idx !== i));
+  const removeVisItem = (i: number) => setVisItems((prev) => prev.filter((_, idx) => idx !== i));
 
-  const addHoleProfile = (textureIndex: number) => {
-    setVisTextures((prev) => {
+  const addVisProfile = (itemIndex: number) => {
+    setVisItems((prev) => {
       const next = [...prev];
-      const t = next[textureIndex];
-      if (!t) return prev;
-      next[textureIndex] = {
-        ...t,
-        profiles: [...t.profiles, { name: '', hole: 8, spacing: 16, thumbnail: '' }],
+      const item = next[itemIndex];
+      if (!item) return prev;
+      next[itemIndex] = {
+        ...item,
+        profiles: [...(item.profiles ?? []), { name: '', image: '' }],
       };
       return next;
     });
   };
-  const updateHoleProfile = (
-    textureIndex: number,
+  const updateVisProfile = (
+    itemIndex: number,
     profileIndex: number,
-    field: keyof VisHoleRow,
-    value: string | number
+    field: keyof VisProfileRow,
+    value: string
   ) => {
-    setVisTextures((prev) => {
+    setVisItems((prev) => {
       const next = [...prev];
-      const t = next[textureIndex];
-      if (!t?.profiles[profileIndex]) return prev;
-      const profiles = [...t.profiles];
-      profiles[profileIndex] = { ...profiles[profileIndex], [field]: value } as VisHoleRow;
-      next[textureIndex] = { ...t, profiles };
+      const item = next[itemIndex];
+      if (!item?.profiles[profileIndex]) return prev;
+      const profiles = [...item.profiles];
+      profiles[profileIndex] = { ...profiles[profileIndex], [field]: value };
+      next[itemIndex] = { ...item, profiles };
       return next;
     });
   };
-  const removeHoleProfile = (textureIndex: number, profileIndex: number) => {
-    setVisTextures((prev) => {
+  const removeVisProfile = (itemIndex: number, profileIndex: number) => {
+    setVisItems((prev) => {
       const next = [...prev];
-      const t = next[textureIndex];
-      if (!t || t.profiles.length <= 1) return prev;
-      next[textureIndex] = {
-        ...t,
-        profiles: t.profiles.filter((_, j) => j !== profileIndex),
+      const item = next[itemIndex];
+      if (!item) return prev;
+      next[itemIndex] = {
+        ...item,
+        profiles: item.profiles.filter((_, j) => j !== profileIndex),
       };
       return next;
     });
@@ -397,11 +464,20 @@ function ProductForm({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    const resolvedSlug = (slug.trim() || slugify(title.trim())).trim();
-    if (!resolvedSlug) {
-      alert('Title or URL slug is required.');
-      return;
-    }
+    try {
+      const resolvedSlug = (str(slug) || slugify(str(title))).trim();
+      if (!resolvedSlug) {
+        alert('Title or URL slug is required.');
+        return;
+      }
+      if (!str(title)) {
+        alert('Title is required.');
+        return;
+      }
+      if (!str(image)) {
+        alert('Card / listing image is required.');
+        return;
+      }
 
     const aboutTabs: SubProductAboutTab[] =
       aboutTabDefs
@@ -417,114 +493,116 @@ function ProductForm({
 
     const substratesClean = substrateItems
       .map((s) => ({
-        name: s.name.trim(),
-        thickness: s.thickness?.trim() || undefined,
-        description: s.description?.trim() || undefined,
-        image: s.image?.trim() || undefined,
+        name: str(s.name),
+        thickness: str(s.thickness) || undefined,
+        description: str(s.description) || undefined,
+        image: str(s.image) || undefined,
       }))
       .filter((s) => s.name);
 
     const finishesClean = finishItems
       .map((f) => ({
-        name: f.name.trim(),
-        description: f.description?.trim() || undefined,
-        image: f.image.trim(),
+        name: str(f.name),
+        description: str(f.description) || undefined,
+        image: str(f.image),
       }))
       .filter((f) => f.name && f.image);
 
     const certificationsClean = certificationItems
       .map((c) => ({
-        name: c.name.trim(),
-        image: c.image.trim(),
-        description: c.description?.trim() || undefined,
+        name: str(c.name),
+        image: str(c.image),
+        description: str(c.description) || undefined,
       }))
       .filter((c) => c.name && c.image);
 
-    const visualizerTexturesPayload = visTextures
-      .map((vt) => ({
-        name: vt.name.trim(),
-        image: vt.image.trim(),
-        profiles: vt.profiles
+    const visualizerItemsPayload = visItems
+      .map((item) => {
+        const profiles = (item.profiles ?? [])
           .map((p) => ({
-            name: p.name.trim(),
-            hole: Number(p.hole),
-            spacing: Number(p.spacing),
-            thumbnail: p.thumbnail.trim() || undefined,
+            name: str(p.name),
+            image: str(p.image),
           }))
-          .filter(
-            (p) =>
-              p.name &&
-              Number.isFinite(p.hole) &&
-              p.hole > 0 &&
-              Number.isFinite(p.spacing) &&
-              p.spacing > 0
-          ),
-      }))
-      .filter((vt) => vt.name && vt.image && vt.profiles.length > 0);
+          .filter((p) => p.name && p.image);
+        return {
+          name: str(item.name),
+          thumbnail: str(item.thumbnail),
+          glb: str(item.glb),
+          description: str(item.description) || undefined,
+          ...(profiles.length > 0 ? { profiles } : {}),
+        };
+      })
+      .filter((item) => item.name && item.thumbnail && item.glb);
 
     const body: CreateProductBody = {
       slug: resolvedSlug,
-      title: title.trim(),
-      description: description.trim(),
-      image: image.trim(),
-      heroImage: heroImage.trim() || undefined,
-      brochureUrl: brochureUrl.trim() || undefined,
-      categorySlug: categorySlug.trim() || undefined,
+      title: str(title),
+      description: str(description),
+      image: str(image),
+      heroImage: str(heroImage) || undefined,
+      brochureUrl: str(brochureUrl) || undefined,
+      categorySlug: str(categorySlug) || undefined,
       order: typeof order === 'number' ? order : 0,
-      shortDescription: shortDescription.trim() || undefined,
-      metaTitle: metaTitle.trim() || undefined,
-      metaDescription: metaDescription.trim() || undefined,
+      shortDescription: str(shortDescription) || undefined,
+      metaTitle: str(metaTitle) || undefined,
+      metaDescription: str(metaDescription) || undefined,
       showTrademark,
-      specSectionTitle: specSectionTitle.trim(),
-      certificationsSectionTitle: certificationsSectionTitle.trim(),
-      certificationsSectionDescription: certificationsSectionDescription.trim(),
-      ...(specDescription.trim() && { specDescription: specDescription.trim() }),
-      ...(specs.filter((s) => s.label.trim() || s.value.trim()).length > 0 && {
+      specSectionTitle: str(specSectionTitle),
+      certificationsSectionTitle: str(certificationsSectionTitle),
+      certificationsSectionDescription: str(certificationsSectionDescription),
+      ...(str(specDescription) && { specDescription: str(specDescription) }),
+      ...(specs.filter((s) => str(s.label) || str(s.value)).length > 0 && {
         specs: specs
-          .filter((s) => s.label.trim() || s.value.trim())
-          .map((s) => ({ label: s.label.trim() || '—', value: s.value.trim() || '—' })),
+          .filter((s) => str(s.label) || str(s.value))
+          .map((s) => ({ label: str(s.label) || '—', value: str(s.value) || '—' })),
       }),
-      galleryImages: galleryImages.filter((g) => g.url.trim()).map((g) => ({
-        url: g.url.trim(),
-        alt: g.alt?.trim() || undefined,
-      })),
+      galleryImages: galleryImages
+        .filter((g) => str(g.url))
+        .map((g) => ({
+          url: str(g.url),
+          alt: str(g.alt) || undefined,
+        })),
       ...(aboutTabs.length > 0 && { aboutTabs }),
-      ...((substratesTitle.trim() ||
-        substratesDescription.trim() ||
+      ...((str(substratesTitle) ||
+        str(substratesDescription) ||
         substratesClean.length > 0) && {
         substratesSection: {
-          title: substratesTitle.trim() || undefined,
-          description: substratesDescription.trim() || undefined,
+          title: str(substratesTitle) || undefined,
+          description: str(substratesDescription) || undefined,
           items: substratesClean,
         },
       }),
-      ...((finishesTitle.trim() ||
-        finishesDescription.trim() ||
+      ...((str(finishesTitle) ||
+        str(finishesDescription) ||
         finishesClean.length > 0) && {
         finishesSection: {
-          title: finishesTitle.trim() || undefined,
-          description: finishesDescription.trim() || undefined,
+          title: str(finishesTitle) || undefined,
+          description: str(finishesDescription) || undefined,
           items: finishesClean,
         },
       }),
       certifications: certificationsClean,
-      visualizerDimensions: {
-        width: Number(visW) > 0 ? Number(visW) : 120,
-        height: Number(visH) > 0 ? Number(visH) : 60,
-        depth: Number(visD) > 0 ? Number(visD) : 4,
-      },
-      visualizerTitle: visTitle.trim() || undefined,
-      visualizerDescription: visDesc.trim() || undefined,
-      visualizerTechnicalCaption: visTechnical.trim() || undefined,
-      visualizerTextures: visualizerTexturesPayload,
+      visualizerTitle: str(visTitle) || undefined,
+      visualizerDescription: str(visDesc) || undefined,
+      visualizerItems: visualizerItemsPayload,
     };
 
     if (profilesSectionRef.current) {
       body.profilesSection = profilesSectionRef.current;
     }
 
-    onSave(body);
+      onSave(body);
+    } catch (err) {
+      console.error('Product save failed:', err);
+      alert(err instanceof Error ? err.message : 'Could not prepare product data for save.');
+    }
   };
+
+  const saveBlockedReason = !str(title)
+    ? 'Title is required'
+    : !str(image)
+      ? 'Card / listing image is required'
+      : null;
 
   return (
     <section className={hideTitle ? undefined : 'mb-6'}>
@@ -539,13 +617,20 @@ function ProductForm({
           <p className="m-0 mt-1 font-mono text-sm text-gray-800">{product._id}</p>
         </div>
       ) : null}
-      <form onSubmit={handleSubmit} className="flex flex-col gap-3">
+      <form onSubmit={handleSubmit} noValidate className="flex flex-col gap-3">
         <input
           ref={inlineFileRef}
           type="file"
           accept="image/jpeg,image/png,image/gif,image/webp,image/avif"
           className="hidden"
           onChange={handleInlineImageFile}
+        />
+        <input
+          ref={glbFileRef}
+          type="file"
+          accept=".glb,model/gltf-binary"
+          className="hidden"
+          onChange={handleGlbFile}
         />
         <SectionHeading>Basic info</SectionHeading>
         <label>
@@ -640,7 +725,7 @@ function ProductForm({
           />
           <div className="flex flex-wrap gap-2 items-center">
             <input
-              type="url"
+              type="text"
               value={brochureUrl}
               onChange={(e) => setBrochureUrl(e.target.value)}
               placeholder="https://…"
@@ -788,7 +873,7 @@ function ProductForm({
                   {slotUploading(uploadingSlot, { kind: 'certification', index: i }) ? '…' : 'Upload'}
                 </button>
                 <input
-                  type="url"
+                  type="text"
                   placeholder="Image URL"
                   value={c.image}
                   onChange={(e) => updateCertification(i, 'image', e.target.value)}
@@ -990,10 +1075,8 @@ function ProductForm({
 
         <SectionHeading>3D Visualizer</SectionHeading>
         <p className="m-0 mb-2 text-xs text-gray-500 leading-relaxed">
-          Upload each surface texture and define one or more perforation profiles (hole diameter and spacing in
-          mm) for that texture. The storefront shows only what you configure here—no client-side hole sliders or
-          uploads. Images load through your API texture proxy for WebGL (CORS); configure{' '}
-          <span className="font-mono">TEXTURE_PROXY_ALLOWED_HOSTS</span> for non–ImageKit hosts.
+          Add finishes/shades with a thumbnail and GLB model. Each item can include multiple profiles (PNG/JPG
+          image + name). The storefront loads the item GLB and lets visitors pick a profile.
         </p>
         <label>
           <span className={labelClass}>Section title (public)</span>
@@ -1014,181 +1097,156 @@ function ProductForm({
             className={`${inputClass} resize-y`}
           />
         </label>
-        <label>
-          <span className={labelClass}>Technical hint under canvas (optional)</span>
-          <input
-            type="text"
-            value={visTechnical}
-            onChange={(e) => setVisTechnical(e.target.value)}
-            placeholder="Drag to rotate · scroll or +/- to zoom"
-            className={inputClass}
-          />
-        </label>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-2">
-          <label>
-            <span className={labelClass}>Panel width (cm)</span>
-            <input
-              type="number"
-              min={1}
-              value={visW}
-              onChange={(e) => setVisW(parseNumericInput(e.target.value))}
-              className={inputClass}
-            />
-          </label>
-          <label>
-            <span className={labelClass}>Panel height (cm)</span>
-            <input
-              type="number"
-              min={1}
-              value={visH}
-              onChange={(e) => setVisH(parseNumericInput(e.target.value))}
-              className={inputClass}
-            />
-          </label>
-          <label>
-            <span className={labelClass}>Panel depth (cm)</span>
-            <input
-              type="number"
-              min={1}
-              value={visD}
-              onChange={(e) => setVisD(parseNumericInput(e.target.value))}
-              className={inputClass}
-            />
-          </label>
-        </div>
-        <div className="flex justify-between items-center mb-1 mt-2">
-          <span className={labelClass}>Textures (each with its own perforation profiles)</span>
-          <button type="button" onClick={addVisTexture} className="text-xs text-primary-600 hover:underline">
-            + Add texture
-          </button>
-        </div>
-        {visTextures.map((vt, ti) => (
-          <div
-            key={ti}
-            className="mb-4 rounded-lg border border-gray-200 bg-gray-50/80 p-3 space-y-3"
-          >
-            <div className="flex flex-wrap gap-2 items-start justify-between">
-              <input
-                placeholder="Material name"
-                value={vt.name}
-                onChange={(e) => updateVisTexture(ti, 'name', e.target.value)}
-                className={`${inputClass} text-sm flex-1 min-w-[140px]`}
-              />
-              <button type="button" onClick={() => removeVisTexture(ti)} className={deleteBtnClass}>
-                Remove texture
-              </button>
-            </div>
-            <div className="flex gap-2 items-center flex-wrap">
-              {vt.image ? (
-                <img
-                  src={vt.image}
-                  alt=""
-                  className="h-14 w-14 rounded object-cover border border-gray-300 shrink-0"
+        <div>
+          <div className="flex justify-between items-center mb-1">
+            <span className={labelClass}>3D items</span>
+            <button type="button" onClick={addVisItem} className="text-xs text-primary-600 hover:underline">
+              + Add item
+            </button>
+          </div>
+          {visItems.map((item, i) => (
+            <div
+              key={i}
+              className="mb-3 rounded-lg border border-gray-200 bg-gray-50/80 p-3 space-y-3"
+            >
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                <input
+                  placeholder="Item name"
+                  value={item.name}
+                  onChange={(e) => updateVisItem(i, 'name', e.target.value)}
+                  className={`${inputClass} text-sm`}
                 />
-              ) : null}
-              <button
-                type="button"
-                onClick={() => openInlineImagePicker({ kind: 'visualizerTexture', textureIndex: ti })}
-                disabled={uploadingSlot !== null}
-                className={inlineUploadBtnClass}
-              >
-                {slotUploading(uploadingSlot, { kind: 'visualizerTexture', textureIndex: ti }) ? '…' : 'Upload'}
-              </button>
-              <input
-                placeholder="Texture image URL"
-                value={vt.image}
-                onChange={(e) => updateVisTexture(ti, 'image', e.target.value)}
-                className={`${inputClass} text-sm flex-1 min-w-0`}
-              />
-            </div>
-            <div>
-              <div className="flex justify-between items-center mb-1">
-                <span className="text-xs font-medium text-gray-600">Perforation profiles for this texture (mm)</span>
-                <button
-                  type="button"
-                  onClick={() => addHoleProfile(ti)}
-                  className="text-xs text-primary-600 hover:underline"
-                >
-                  + Add profile
-                </button>
-              </div>
-              {vt.profiles.map((hp, pi) => (
-                <div
-                  key={pi}
-                  className="grid grid-cols-1 md:grid-cols-12 gap-2 mb-2 items-start border-t border-gray-200 pt-2 first:border-t-0 first:pt-0"
-                >
-                  <input
-                    placeholder="Label (e.g. 1.5/8x8)"
-                    value={hp.name}
-                    onChange={(e) => updateHoleProfile(ti, pi, 'name', e.target.value)}
-                    className={`${inputClass} text-sm md:col-span-3`}
-                  />
-                  <input
-                    type="number"
-                    placeholder="Hole Ø (mm)"
-                    min={0.5}
-                    step={0.5}
-                    value={hp.hole}
-                    onChange={(e) =>
-                      updateHoleProfile(ti, pi, 'hole', parseNumericInput(e.target.value))
-                    }
-                    className={`${inputClass} text-sm md:col-span-2`}
-                  />
-                  <input
-                    type="number"
-                    placeholder="Spacing (mm)"
-                    min={1}
-                    step={1}
-                    value={hp.spacing}
-                    onChange={(e) =>
-                      updateHoleProfile(ti, pi, 'spacing', parseNumericInput(e.target.value))
-                    }
-                    className={`${inputClass} text-sm md:col-span-2`}
-                  />
-                  <div className="flex gap-1 items-center md:col-span-4 flex-wrap min-w-0">
-                    {hp.thumbnail ? (
-                      <img
-                        src={hp.thumbnail}
-                        alt=""
-                        className="h-10 w-10 rounded object-cover border border-gray-300 shrink-0"
-                      />
-                    ) : null}
-                    <button
-                      type="button"
-                      onClick={() =>
-                        openInlineImagePicker({ kind: 'visualizerHoleThumb', textureIndex: ti, profileIndex: pi })
-                      }
-                      disabled={uploadingSlot !== null}
-                      className={inlineUploadBtnClass}
-                    >
-                      {slotUploading(uploadingSlot, {
-                        kind: 'visualizerHoleThumb',
-                        textureIndex: ti,
-                        profileIndex: pi,
-                      })
-                        ? '…'
-                        : 'Thumb'}
-                    </button>
-                    <input
-                      placeholder="Profile thumb URL (optional)"
-                      value={hp.thumbnail}
-                      onChange={(e) => updateHoleProfile(ti, pi, 'thumbnail', e.target.value)}
-                      className={`${inputClass} text-sm flex-1 min-w-0`}
+                <div className="flex gap-1 items-center flex-wrap min-w-0 md:col-span-1">
+                  {item.thumbnail ? (
+                    <img
+                      src={item.thumbnail}
+                      alt=""
+                      className="h-10 w-10 rounded object-cover border border-gray-300 shrink-0"
                     />
-                  </div>
+                  ) : null}
                   <button
                     type="button"
-                    onClick={() => removeHoleProfile(ti, pi)}
-                    disabled={vt.profiles.length <= 1}
-                    className={`${deleteBtnClass} md:col-span-1 justify-self-end`}
+                    onClick={() => openInlineImagePicker({ kind: 'visualizerThumb', index: i })}
+                    disabled={uploadingSlot !== null}
+                    className={inlineUploadBtnClass}
                   >
-                    Remove
+                    {slotUploading(uploadingSlot, { kind: 'visualizerThumb', index: i }) ? '…' : 'Thumb'}
+                  </button>
+                  <input
+                    placeholder="Thumbnail URL"
+                    value={item.thumbnail}
+                    onChange={(e) => updateVisItem(i, 'thumbnail', e.target.value)}
+                    className={`${inputClass} text-sm flex-1 min-w-0`}
+                  />
+                </div>
+                <div className="flex gap-1 items-center flex-wrap min-w-0 md:col-span-2">
+                  <button
+                    type="button"
+                    onClick={() => openGlbPicker(i)}
+                    disabled={uploadingGlbIndex !== null}
+                    className={inlineUploadBtnClass}
+                  >
+                    {uploadingGlbIndex === i ? '…' : 'Upload GLB'}
+                  </button>
+                  <input
+                    placeholder="GLB model URL"
+                    value={item.glb}
+                    onChange={(e) => updateVisItem(i, 'glb', e.target.value)}
+                    className={`${inputClass} text-sm flex-1 min-w-0`}
+                  />
+                  {item.glb ? (
+                    <span className="text-xs text-green-700 shrink-0">GLB attached</span>
+                  ) : null}
+                </div>
+                <textarea
+                  placeholder="Description (optional)"
+                  value={item.description}
+                  onChange={(e) => updateVisItem(i, 'description', e.target.value)}
+                  rows={2}
+                  className={`${inputClass} text-sm md:col-span-2 resize-y`}
+                />
+                <button
+                  type="button"
+                  onClick={() => removeVisItem(i)}
+                  className={`${deleteBtnClass} md:col-span-1 mt-1`}
+                >
+                  Remove item
+                </button>
+              </div>
+
+              <div className="border-t border-gray-200 pt-3">
+                <div className="flex justify-between items-center mb-2">
+                  <span className="text-xs font-medium text-gray-600">Profiles (PNG/JPG + name)</span>
+                  <button
+                    type="button"
+                    onClick={() => addVisProfile(i)}
+                    className="text-xs text-primary-600 hover:underline"
+                  >
+                    + Add profile
                   </button>
                 </div>
-              ))}
+                {(item.profiles ?? []).length === 0 ? (
+                  <p className="m-0 text-xs text-gray-500">No profiles yet.</p>
+                ) : null}
+                {(item.profiles ?? []).map((profile, pi) => (
+                  <div
+                    key={pi}
+                    className="grid grid-cols-1 md:grid-cols-12 gap-2 mb-2 items-start border-t border-gray-200 pt-2 first:border-t-0 first:pt-0"
+                  >
+                    <input
+                      placeholder="Profile name"
+                      value={profile.name}
+                      onChange={(e) => updateVisProfile(i, pi, 'name', e.target.value)}
+                      className={`${inputClass} text-sm md:col-span-4`}
+                    />
+                    <div className="flex gap-1 items-center flex-wrap min-w-0 md:col-span-7">
+                      {profile.image ? (
+                        <img
+                          src={profile.image}
+                          alt=""
+                          className="h-10 w-10 rounded object-cover border border-gray-300 shrink-0"
+                        />
+                      ) : null}
+                      <button
+                        type="button"
+                        onClick={() =>
+                          openInlineImagePicker({
+                            kind: 'visualizerProfileImage',
+                            itemIndex: i,
+                            profileIndex: pi,
+                          })
+                        }
+                        disabled={uploadingSlot !== null}
+                        className={inlineUploadBtnClass}
+                      >
+                        {slotUploading(uploadingSlot, {
+                          kind: 'visualizerProfileImage',
+                          itemIndex: i,
+                          profileIndex: pi,
+                        })
+                          ? '…'
+                          : 'Upload'}
+                      </button>
+                      <input
+                        placeholder="Image URL"
+                        value={profile.image}
+                        onChange={(e) => updateVisProfile(i, pi, 'image', e.target.value)}
+                        className={`${inputClass} text-sm flex-1 min-w-0`}
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => removeVisProfile(i, pi)}
+                      className={`${deleteBtnClass} md:col-span-1 justify-self-end`}
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ))}
+              </div>
             </div>
-          </div>
-        ))}
+          ))}
+        </div>
 
         <SectionHeading>Gallery</SectionHeading>
         <div>
@@ -1249,19 +1307,24 @@ function ProductForm({
           />
         </label>
 
-        <div className="flex gap-2 pt-3 border-t border-gray-200">
-          <button
-            type="submit"
-            disabled={isSaving || !title.trim() || !image.trim()}
-            className="py-2 px-4 text-sm font-medium text-white bg-primary-600 border-0 rounded-lg cursor-pointer hover:bg-primary-700 disabled:opacity-60"
-          >
-            {isSaving ? 'Saving…' : 'Save'}
-          </button>
-          <button type="button" onClick={onCancel} className={cancelBtnClass}>
-            Cancel
-          </button>
+        <div className="flex flex-col gap-2 pt-3 border-t border-gray-200">
+          <div className="flex gap-2">
+            <button
+              type="submit"
+              disabled={isSaving || !!saveBlockedReason}
+              className="py-2 px-4 text-sm font-medium text-white bg-primary-600 border-0 rounded-lg cursor-pointer hover:bg-primary-700 disabled:opacity-60 disabled:cursor-not-allowed"
+            >
+              {isSaving ? 'Saving…' : 'Save'}
+            </button>
+            <button type="button" onClick={onCancel} className={cancelBtnClass}>
+              Cancel
+            </button>
+          </div>
+          {saveBlockedReason ? (
+            <p className="m-0 text-sm text-amber-700">{saveBlockedReason} before saving.</p>
+          ) : null}
+          {error && <p className="m-0 text-sm text-red-600">{error}</p>}
         </div>
-        {error && <p className="m-0 text-sm text-red-600">{error}</p>}
       </form>
     </section>
   );
@@ -1342,8 +1405,11 @@ export default function Products() {
         }}
         title="Add product"
         maxWidth="max-w-4xl"
+        closeOnBackdropClick={false}
+        closeOnEscape={false}
       >
         <ProductForm
+          key="new-product"
           product={null}
           categories={categoriesData?.items ?? []}
           onSave={handleCreate}
@@ -1364,9 +1430,12 @@ export default function Products() {
         }}
         title={editing ? `Edit: ${editing.title}` : ''}
         maxWidth="max-w-4xl"
+        closeOnBackdropClick={false}
+        closeOnEscape={false}
       >
         {editing && (
           <ProductForm
+            key={editing._id}
             product={editing}
             categories={categoriesData?.items ?? []}
             onSave={handleUpdate}

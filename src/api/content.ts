@@ -32,7 +32,7 @@ export function getContentByKey(key: string): Promise<ContentItem> {
 
 export function updateContent(
   key: string,
-  body: { value: string; type?: 'text' | 'image' }
+  body: { value: string; type?: 'text' | 'image' | 'video' }
 ): Promise<ContentItem> {
   return request<ContentItem>(`/api/admin/content/${encodeURIComponent(key)}`, {
     method: 'PUT',
