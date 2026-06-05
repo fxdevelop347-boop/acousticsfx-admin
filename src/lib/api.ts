@@ -1,3 +1,5 @@
+import { getApiBaseUrl } from './api-base';
+
 const TOKEN_KEY = 'acousticsfx-admin-token';
 
 export class ApiError extends Error {
@@ -9,7 +11,7 @@ export class ApiError extends Error {
   }
 }
 
-const getBaseUrl = () => import.meta.env.VITE_API_URL ?? 'https://api.themoonlit.in';
+export { getApiBaseUrl } from './api-base';
 
 export function getToken(): string | null {
   try {
@@ -31,7 +33,7 @@ export async function request<T>(
   path: string,
   init?: RequestInit
 ): Promise<T> {
-  const url = path.startsWith('http') ? path : `${getBaseUrl()}${path}`;
+  const url = path.startsWith('http') ? path : `${getApiBaseUrl()}${path}`;
   const token = getToken();
 
   const headers: HeadersInit = {

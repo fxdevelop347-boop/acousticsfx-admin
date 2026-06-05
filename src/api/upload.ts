@@ -1,9 +1,7 @@
 import { getToken } from '../lib/api';
+import { getApiBaseUrl } from '../lib/api-base';
 import { compressImageForUpload } from '../lib/compressImageForUpload';
 
-const getBaseUrl = () => import.meta.env.VITE_API_URL ?? 'https://api.themoonlit.in';
-
-/** ImageKit global upload endpoint — browser talks here directly (not via your API). */
 const IMAGEKIT_UPLOAD_URL = 'https://upload.imagekit.io/api/v1/files/upload';
 
 export interface UploadImageResponse {
@@ -21,7 +19,7 @@ async function uploadViaBackendProxy(file: File): Promise<UploadImageResponse> {
   const token = getToken();
   const form = new FormData();
   form.append('file', file);
-  const res = await fetch(`${getBaseUrl()}/api/admin/upload-image`, {
+  const res = await fetch(`${getApiBaseUrl()}/api/admin/upload-image`, {
     method: 'POST',
     headers: token ? { Authorization: `Bearer ${token}` } : {},
     body: form,
@@ -53,7 +51,7 @@ async function fetchUploadAuth(base: string, authHeader: string | undefined): Pr
 
 export async function uploadImage(file: File): Promise<UploadImageResponse> {
   const authToken = getToken();
-  const base = getBaseUrl();
+  const base = getApiBaseUrl();
   const authHeader = authToken ? `Bearer ${authToken}` : undefined;
 
   const [prepared, auth] = await Promise.all([
@@ -93,6 +91,51 @@ export async function uploadImage(file: File): Promise<UploadImageResponse> {
   return uploadViaBackendProxy(prepared);
 }
 
+/** Upload a GLB 3D model via the API proxy to ImageKit. */
+export async function uploadModel(file: File): Promise<UploadImageResponse> {
+  const ext = file.name.split('.').pop()?.toLowerCase();
+  if (ext !== 'glb' && file.type !== 'model/gltf-binary') {
+    throw new Error('Only GLB files are allowed');
+  }
+  const token = getToken();
+  const form = new FormData();
+  form.append('file', file);
+  const res = await fetch(`${getApiBaseUrl()}/api/admin/upload-model`, {
+    method: 'POST',
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    body: form,
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const message = (body as { error?: string }).error ?? res.statusText;
+    throw new Error(message);
+  }
+  return body as UploadImageResponse;
+}
+
+/** Upload a video (MP4, WebM, MOV) via the API proxy to ImageKit. */
+export async function uploadVideo(file: File): Promise<UploadImageResponse> {
+  const ext = file.name.split('.').pop()?.toLowerCase();
+  const allowed = ['mp4', 'webm', 'mov', 'ogg'];
+  if (!file.type.startsWith('video/') && (!ext || !allowed.includes(ext))) {
+    throw new Error('Only MP4, WebM, or MOV video files are allowed');
+  }
+  const token = getToken();
+  const form = new FormData();
+  form.append('file', file);
+  const res = await fetch(`${getApiBaseUrl()}/api/admin/upload-video`, {
+    method: 'POST',
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    body: form,
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const message = (body as { error?: string }).error ?? res.statusText;
+    throw new Error(message);
+  }
+  return body as UploadImageResponse;
+}
+
 /** Upload a PDF (e.g. product brochure) via the API proxy to ImageKit. */
 export async function uploadDocument(file: File): Promise<UploadImageResponse> {
   if (file.type !== 'application/pdf') {
@@ -101,7 +144,7 @@ export async function uploadDocument(file: File): Promise<UploadImageResponse> {
   const token = getToken();
   const form = new FormData();
   form.append('file', file);
-  const res = await fetch(`${getBaseUrl()}/api/admin/upload-document`, {
+  const res = await fetch(`${getApiBaseUrl()}/api/admin/upload-document`, {
     method: 'POST',
     headers: token ? { Authorization: `Bearer ${token}` } : {},
     body: form,

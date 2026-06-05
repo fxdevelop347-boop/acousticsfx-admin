@@ -1,31 +1,32 @@
 import { useRef, useState } from 'react';
-import { uploadImage } from '../api/upload';
+import { uploadVideo } from '../api/upload';
 import { inputClass, labelClass } from '../lib/styles';
+
 const buttonClass =
   'py-2 px-3 text-sm font-medium text-white bg-primary-600 border-0 rounded-lg cursor-pointer hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-400/50 disabled:opacity-60';
 
-interface ImageUploadFieldProps {
+interface VideoUploadFieldProps {
   label: string;
   hint?: string;
   value: string;
   onChange: (url: string) => void;
 }
 
-export function ImageUploadField({ label, hint, value, onChange }: ImageUploadFieldProps) {
+export function VideoUploadField({ label, hint, value, onChange }: VideoUploadFieldProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
 
   const handleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    if (!file.type.startsWith('image/')) {
-      alert('Please choose an image (JPEG, PNG, GIF, WebP, or AVIF).');
+    if (!file.type.startsWith('video/')) {
+      alert('Please choose a video file (MP4, WebM, or MOV).');
       return;
     }
     e.target.value = '';
     setUploading(true);
     try {
-      const { url } = await uploadImage(file);
+      const { url } = await uploadVideo(file);
       onChange(url);
     } catch (err) {
       alert(err instanceof Error ? err.message : 'Upload failed');
@@ -46,12 +47,12 @@ export function ImageUploadField({ label, hint, value, onChange }: ImageUploadFi
             disabled={uploading}
             className={buttonClass}
           >
-            {uploading ? 'Uploading…' : 'Choose image to upload'}
+            {uploading ? 'Uploading…' : 'Choose video to upload'}
           </button>
           <input
             ref={inputRef}
             type="file"
-            accept="image/jpeg,image/png,image/gif,image/webp,image/avif"
+            accept="video/mp4,video/webm,video/quicktime,video/ogg,.mp4,.webm,.mov"
             className="hidden"
             onChange={handleFile}
           />
@@ -62,21 +63,23 @@ export function ImageUploadField({ label, hint, value, onChange }: ImageUploadFi
               rel="noopener noreferrer"
               className="text-sm text-primary-400 hover:underline"
             >
-              Open current image
+              Open current video
             </a>
           )}
         </div>
         {value && (
-          <div className="rounded-lg border border-gray-300 overflow-hidden bg-gray-50 max-w-[280px]">
-            <img src={value} alt="" className="w-full h-auto object-cover max-h-40" />
-          </div>
+          <video
+            src={value}
+            controls
+            className="w-full max-w-[360px] rounded-lg border border-gray-300 bg-black"
+          />
         )}
         <input
           type="text"
           value={value}
           onChange={(e) => onChange(e.target.value)}
           className={inputClass}
-          placeholder="Or paste an image URL"
+          placeholder="Or paste a video URL (MP4, WebM, or YouTube link)"
         />
       </div>
     </div>

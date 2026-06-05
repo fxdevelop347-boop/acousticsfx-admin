@@ -37,6 +37,9 @@ function CategoryForm({
     name: string;
     description?: string;
     image?: string;
+    heroImage?: string;
+    heroHeading?: string;
+    heroDescription?: string;
     order: number;
     tagline?: string;
     metaTitle?: string;
@@ -52,6 +55,9 @@ function CategoryForm({
   const [tagline, setTagline] = useState(category?.tagline ?? '');
   const [description, setDescription] = useState(category?.description ?? '');
   const [image, setImage] = useState(category?.image ?? '');
+  const [heroImage, setHeroImage] = useState(category?.heroImage ?? '');
+  const [heroHeading, setHeroHeading] = useState(category?.heroHeading ?? '');
+  const [heroDescription, setHeroDescription] = useState(category?.heroDescription ?? '');
   const [order, setOrder] = useState(category?.order ?? 0);
   const [metaTitle, setMetaTitle] = useState(category?.metaTitle ?? '');
   const [metaDescription, setMetaDescription] = useState(category?.metaDescription ?? '');
@@ -63,6 +69,9 @@ function CategoryForm({
       name: name.trim(),
       description: description.trim() || undefined,
       image: image.trim() || undefined,
+      heroImage: heroImage.trim() || undefined,
+      heroHeading: heroHeading.trim() || undefined,
+      heroDescription: heroDescription.trim() || undefined,
       order,
       tagline: tagline.trim() || undefined,
       metaTitle: metaTitle.trim() || undefined,
@@ -125,10 +134,44 @@ function CategoryForm({
           />
         </label>
 
+        <SectionHeading>Catalog page hero</SectionHeading>
+        <p className="m-0 text-xs text-gray-500">
+          Shown at the top of /products/:slug (e.g. /products/acoustics). Leave blank to use site defaults.
+        </p>
+        <label>
+          <span className={labelClass}>Hero heading (optional)</span>
+          <input
+            type="text"
+            value={heroHeading}
+            onChange={(e) => setHeroHeading(e.target.value)}
+            placeholder="Where *design* meets emotion"
+            className={inputClass}
+          />
+          <p className="m-0 mt-1 text-xs text-gray-500">
+            Wrap a word in *asterisks* to show it in italic (e.g. Where *design* meets emotion).
+          </p>
+        </label>
+        <label>
+          <span className={labelClass}>Hero description (optional)</span>
+          <textarea
+            value={heroDescription}
+            onChange={(e) => setHeroDescription(e.target.value)}
+            rows={3}
+            placeholder="We design spaces that unite function and beauty..."
+            className={`${inputClass} resize-y`}
+          />
+        </label>
+        <ImageUploadField
+          label="Hero banner image (optional)"
+          hint="Full-width photo below the heading. Falls back to the default site image when empty."
+          value={heroImage}
+          onChange={setHeroImage}
+        />
+
         <SectionHeading>Media</SectionHeading>
         <ImageUploadField
-          label="Image (optional)"
-          hint="Upload via ImageKit or paste URL. Shown on category cards and hero."
+          label="Card image (optional)"
+          hint="Thumbnail for category lists and the admin table."
           value={image}
           onChange={setImage}
         />

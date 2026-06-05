@@ -12,6 +12,9 @@ export interface CategoryItem {
   name: string;
   description?: string;
   image?: string;
+  heroImage?: string;
+  heroHeading?: string;
+  heroDescription?: string;
   order: number;
   tagline?: string;
   metaTitle?: string;
@@ -35,6 +38,9 @@ export function createCategory(body: {
   name: string;
   description?: string;
   image?: string;
+  heroImage?: string;
+  heroHeading?: string;
+  heroDescription?: string;
   order?: number;
   tagline?: string;
   metaTitle?: string;
@@ -53,6 +59,9 @@ export function updateCategory(
     name: string;
     description?: string;
     image?: string;
+    heroImage?: string;
+    heroHeading?: string;
+    heroDescription?: string;
     order?: number;
     tagline?: string;
     metaTitle?: string;
