@@ -3,7 +3,7 @@
  *
  * - Override with **VITE_API_URL** in `.env.local` when needed.
  * - **Local dev** (`yarn dev`): defaults to `http://localhost:8080`.
- * - **Production build** (deployed): defaults to `https://api.themoonlit.in`.
+ * - **Production build** (deployed): defaults to `https://skyblue-parrot-526216.hostingersite.com`.
  */
 export function getApiBaseUrl(): string {
   const fromEnv = import.meta.env.VITE_API_URL?.trim();
@@ -13,5 +13,5 @@ export function getApiBaseUrl(): string {
   if (import.meta.env.DEV) {
     return 'http://localhost:8080';
   }
-  return 'https://api.themoonlit.in';
+  return 'https://skyblue-parrot-526216.hostingersite.com';
 }
