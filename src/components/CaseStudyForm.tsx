@@ -3,6 +3,7 @@ import { Plus, Trash2 } from 'lucide-react';
 import { inputClass, labelClass, cancelBtnClass, primaryBtnClass } from '../lib/styles';
 import { slugify } from '../lib/slugify';
 import { ImageUploadField } from './ImageUploadField';
+import { RichTextField } from './RichTextField';
 import type {
   CaseStudyGalleryImage,
   CaseStudyItem,
@@ -11,10 +12,39 @@ import type {
 } from '../api/caseStudies';
 
 const MAX_METRICS = 4;
-const MAX_GALLERY_IMAGES = 8;
+const MAX_GALLERY_IMAGES = 12;
 
 const TABS = ['Overview', 'Story', 'Metrics & media', 'SEO & status'] as const;
 type Tab = (typeof TABS)[number];
+
+const HTML_TAG_RE = /<\/?[a-z][^>]*>/i;
+
+function escapeHtml(text: string): string {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+/**
+ * Story fields predating the rich editor hold plain text with blank-line
+ * paragraphs. Quill parses its value as HTML, so that text would collapse into a
+ * single run — promote it to paragraphs before handing it over.
+ */
+function toEditorHtml(value: string): string {
+  if (!value.trim()) return '';
+  if (HTML_TAG_RE.test(value)) return value;
+  return value
+    .split(/\n\s*\n/)
+    .map((para) => para.trim())
+    .filter(Boolean)
+    .map((para) => `<p>${escapeHtml(para).replace(/\n/g, '<br>')}</p>`)
+    .join('');
+}
+
+/** Quill leaves `<p><br></p>` behind once a field is cleared, which would keep an
+ *  empty block on the page. Treat markup with no readable text as blank. */
+function normalizeHtml(html: string): string {
+  const text = html.replace(/<[^>]*>/g, '').replace(/&nbsp;/gi, ' ').trim();
+  return text ? html.trim() : '';
+}
 
 /**
  * Editing shape. `productsUsed` is a comma-separated string here because that is
@@ -81,9 +111,9 @@ function toForm(item: CaseStudyItem): FormState {
     industry: item.industry ?? '',
     location: item.location ?? '',
     year: item.year ?? '',
-    challenge: item.challenge ?? '',
-    solution: item.solution ?? '',
-    results: item.results ?? '',
+    challenge: toEditorHtml(item.challenge ?? ''),
+    solution: toEditorHtml(item.solution ?? ''),
+    results: toEditorHtml(item.results ?? ''),
     metrics: item.metrics ?? [],
     gallery: item.gallery ?? [],
     productsUsed: (item.productsUsed ?? []).join(', '),
@@ -110,9 +140,9 @@ function toPayload(form: FormState, isEditing: boolean): CaseStudyPayload {
     industry: trimmed(form.industry),
     location: trimmed(form.location),
     year: trimmed(form.year),
-    challenge: trimmed(form.challenge),
-    solution: trimmed(form.solution),
-    results: trimmed(form.results),
+    challenge: normalizeHtml(form.challenge),
+    solution: normalizeHtml(form.solution),
+    results: normalizeHtml(form.results),
     metrics: form.metrics.filter((m) => m.value.trim() && m.label.trim()),
     gallery: form.gallery.filter((g) => g.url.trim()),
     productsUsed: form.productsUsed
@@ -227,6 +257,10 @@ export default function CaseStudyForm({
               className={`${inputClass} resize-y`}
               placeholder="One or two sentences shown on listing cards and the home page carousel."
             />
+            <p className="text-xs text-gray-500 mt-1">
+              Plain text only — it is reused on cards and in search results. Put the
+              full write-up, with headings and bullets, on the Story tab.
+            </p>
           </label>
 
           <ImageUploadField
@@ -295,41 +329,33 @@ export default function CaseStudyForm({
       )}
 
       {tab === 'Story' && (
-        <div className="flex flex-col gap-3">
+        <div className="flex flex-col gap-5">
           <p className="text-xs text-gray-500 m-0">
             Each section becomes its own block on the case study page. Leave any of them
-            blank and that block is hidden.
+            blank and that block is hidden. Use the toolbar to add sub-headings and
+            bullet points — long lists of deliverables read far better as bullets.
           </p>
-          <label>
-            <span className={labelClass}>The challenge</span>
-            <textarea
-              value={form.challenge}
-              onChange={(e) => set('challenge', e.target.value)}
-              rows={5}
-              className={`${inputClass} resize-y`}
-              placeholder="What acoustic problem was the client facing?"
-            />
-          </label>
-          <label>
-            <span className={labelClass}>Our solution</span>
-            <textarea
-              value={form.solution}
-              onChange={(e) => set('solution', e.target.value)}
-              rows={5}
-              className={`${inputClass} resize-y`}
-              placeholder="What did FX Acoustics design, supply, and install?"
-            />
-          </label>
-          <label>
-            <span className={labelClass}>The results</span>
-            <textarea
-              value={form.results}
-              onChange={(e) => set('results', e.target.value)}
-              rows={5}
-              className={`${inputClass} resize-y`}
-              placeholder="What measurably changed for the client?"
-            />
-          </label>
+          <RichTextField
+            label="The challenge"
+            value={form.challenge}
+            onChange={(html) => set('challenge', html)}
+            placeholder="What acoustic problem was the client facing?"
+            minHeight={160}
+          />
+          <RichTextField
+            label="Our solution"
+            value={form.solution}
+            onChange={(html) => set('solution', html)}
+            placeholder="What did FX Acoustics design, supply, and install?"
+            minHeight={220}
+          />
+          <RichTextField
+            label="The results"
+            value={form.results}
+            onChange={(html) => set('results', html)}
+            placeholder="What measurably changed for the client?"
+            minHeight={160}
+          />
         </div>
       )}
 
