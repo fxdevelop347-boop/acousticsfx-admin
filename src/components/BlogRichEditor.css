@@ -1,0 +1,62 @@
+/* Quill editor wrapper - light theme to match admin */
+.blog-rich-editor__quill {
+  --ql-editor-min-height: 220px;
+}
+
+.blog-rich-editor .ql-toolbar.ql-snow,
+.blog-rich-editor .ql-container.ql-snow {
+  border-color: #e5e7eb;
+}
+
+.blog-rich-editor .ql-toolbar.ql-snow {
+  background: #f9fafb;
+  border-radius: 0.5rem 0.5rem 0 0;
+}
+
+.blog-rich-editor .ql-container.ql-snow {
+  background: #ffffff;
+  border-radius: 0 0 0.5rem 0.5rem;
+  border-top: 0;
+}
+
+.blog-rich-editor .ql-editor {
+  min-height: var(--ql-editor-min-height);
+  color: #111827;
+}
+
+.blog-rich-editor .ql-editor.ql-blank::before {
+  color: #9ca3af;
+  font-style: normal;
+}
+
+.blog-rich-editor .ql-snow .ql-stroke {
+  stroke: #6b7280;
+}
+
+.blog-rich-editor .ql-snow .ql-fill {
+  fill: #9ca3af;
+}
+
+.blog-rich-editor .ql-snow .ql-picker {
+  color: #374151;
+}
+
+.blog-rich-editor .ql-snow .ql-toolbar button:hover .ql-stroke,
+.blog-rich-editor .ql-snow .ql-toolbar button.ql-active .ql-stroke {
+  stroke: #2563eb;
+}
+
+.blog-rich-editor .ql-snow .ql-toolbar button:hover .ql-fill,
+.blog-rich-editor .ql-snow .ql-toolbar button.ql-active .ql-fill {
+  fill: #2563eb;
+}
+
+.blog-rich-editor .ql-editor a {
+  color: #2563eb;
+}
+
+.blog-rich-editor .ql-editor img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 0.25rem;
+}
