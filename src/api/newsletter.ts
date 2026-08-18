@@ -30,16 +30,3 @@ export function addNewsletterSubscription(data: { email: string }): Promise<{ ok
     body: JSON.stringify(data),
   });
 }
-
-export function deleteNewsletterSubscription(id: string): Promise<void> {
-  return request<void>(`/api/admin/newsletter-subscriptions/${id}`, { method: 'DELETE' });
-}
-
-export function deleteNewsletterSubscriptions(
-  ids: string[]
-): Promise<{ ok: boolean; deletedCount: number }> {
-  return request<{ ok: boolean; deletedCount: number }>(
-    '/api/admin/newsletter-subscriptions/bulk-delete',
-    { method: 'POST', body: JSON.stringify({ ids }) }
-  );
-}
