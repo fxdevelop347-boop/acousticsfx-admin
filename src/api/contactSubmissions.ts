@@ -5,6 +5,7 @@ export interface ContactSubmissionItem {
   name: string;
   email: string;
   phone?: string;
+  company?: string;
   subject: string;
   message: string;
   createdAt: string;
@@ -26,4 +27,8 @@ export function listContactSubmissions(params?: {
   if (params?.skip != null) sp.set('skip', String(params.skip));
   const q = sp.toString();
   return request<ContactSubmissionsListResponse>(`/api/admin/contact-submissions${q ? `?${q}` : ''}`);
+}
+
+export function deleteContactSubmission(id: string): Promise<void> {
+  return request<void>(`/api/admin/contact-submissions/${id}`, { method: 'DELETE' });
 }
