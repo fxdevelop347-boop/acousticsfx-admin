@@ -1,7 +1,12 @@
 import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
+import { Trash2 } from 'lucide-react';
 import { useNewsletterSubscriptionsList } from '../hooks/useNewsletterSubscriptionsList';
-import { addNewsletterSubscription } from '../api/newsletter';
+import {
+  addNewsletterSubscription,
+  deleteNewsletterSubscription,
+  deleteNewsletterSubscriptions,
+} from '../api/newsletter';
 import Modal from '../components/Modal';
 import Pagination from '../components/Pagination';
 import { inputClass, labelClass, cancelBtnClass } from '../lib/styles';
@@ -31,6 +36,9 @@ export default function Newsletter() {
   const [addStatus, setAddStatus] = useState<{ type: 'error'|'success', msg: string } | null>(null);
   const [sendStatus, setSendStatus] = useState<'idle' | 'success' | 'info'>('idle');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const items = data?.items ?? [];
   const totalCount = data?.total ?? 0;
@@ -117,6 +125,54 @@ export default function Newsletter() {
   const handleSendNewsletter = (e: React.FormEvent) => {
     e.preventDefault();
     setSendStatus('info');
+  };
+
+  const invalidateSubscriptions = () =>
+    queryClient.invalidateQueries({ queryKey: ['admin', 'newsletter-subscriptions'] });
+
+  const handleDeleteOne = async (id: string, email: string) => {
+    if (!confirm(`Remove ${email} from the subscriber list?`)) return;
+    setDeleteError(null);
+    setDeletingId(id);
+    try {
+      await deleteNewsletterSubscription(id);
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+      invalidateSubscriptions();
+    } catch (e) {
+      setDeleteError(e instanceof Error ? e.message : 'Failed to delete subscriber');
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
+  const handleDeleteSelected = async () => {
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0) return;
+    if (
+      !confirm(
+        `Remove ${ids.length} subscriber${ids.length === 1 ? '' : 's'} from the list? This cannot be undone.`
+      )
+    )
+      return;
+    setDeleteError(null);
+    setIsBulkDeleting(true);
+    try {
+      await deleteNewsletterSubscriptions(ids);
+      setSelectedIds(new Set());
+      // Deleting a whole page can leave the offset past the end of the list.
+      if (skip > 0 && ids.length >= pageItemCount) {
+        setSkip(Math.max(0, skip - PAGE_SIZE));
+      }
+      invalidateSubscriptions();
+    } catch (e) {
+      setDeleteError(e instanceof Error ? e.message : 'Failed to delete subscribers');
+    } finally {
+      setIsBulkDeleting(false);
+    }
   };
 
   return (
@@ -253,7 +309,7 @@ export default function Newsletter() {
             Emails submitted via the newsletter signup on the public site.
           </p>
           {pageItemCount > 0 && (
-            <div className="mb-3 flex items-center gap-4">
+            <div className="mb-3 flex items-center gap-4 flex-wrap">
               <button
                 type="button"
                 onClick={handleSelectAllPage}
@@ -262,11 +318,27 @@ export default function Newsletter() {
                 {allPageSelected ? 'Deselect page' : 'Select page'}
               </button>
               {selectedCount > 0 && (
-                <span className="text-gray-500 text-sm">
-                  {selectedCount} selected
-                </span>
+                <>
+                  <span className="text-gray-500 text-sm">
+                    {selectedCount} selected
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleDeleteSelected}
+                    disabled={isBulkDeleting}
+                    className="inline-flex items-center gap-1.5 py-1.5 px-3 text-sm font-medium text-red-600 bg-white border border-red-300 rounded-lg cursor-pointer hover:bg-red-50 disabled:opacity-60 disabled:cursor-not-allowed"
+                  >
+                    <Trash2 size={14} />
+                    {isBulkDeleting
+                      ? 'Deleting…'
+                      : `Delete selected (${selectedCount})`}
+                  </button>
+                </>
               )}
             </div>
+          )}
+          {deleteError && (
+            <p className="text-red-600 text-sm mb-3">{deleteError}</p>
           )}
           {isLoading && <CompactLoader />}
           {isError && (
@@ -294,6 +366,7 @@ export default function Newsletter() {
                       </th>
                       <th className="px-4 py-3 font-medium">Date</th>
                       <th className="px-4 py-3 font-medium">Email</th>
+                      <th className="px-4 py-3 font-medium w-20 text-right">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-200">
@@ -315,6 +388,18 @@ export default function Newsletter() {
                           <a href={`mailto:${row.email}`} className="text-primary-400 hover:underline">
                             {row.email}
                           </a>
+                        </td>
+                        <td className="px-4 py-3 text-right">
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteOne(row._id, row.email)}
+                            disabled={deletingId === row._id}
+                            title={`Delete ${row.email}`}
+                            aria-label={`Delete ${row.email}`}
+                            className="p-1.5 text-gray-400 bg-transparent border-0 rounded-md cursor-pointer hover:text-red-600 hover:bg-red-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            <Trash2 size={16} />
+                          </button>
                         </td>
                       </tr>
                     ))}
