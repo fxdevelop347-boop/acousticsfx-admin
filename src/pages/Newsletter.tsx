@@ -2,13 +2,16 @@ import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { Trash2 } from 'lucide-react';
 import { useNewsletterSubscriptionsList } from '../hooks/useNewsletterSubscriptionsList';
+import { useMeQuery } from '../hooks/useMeQuery';
 import {
   addNewsletterSubscription,
   deleteNewsletterSubscription,
   deleteNewsletterSubscriptions,
+  sendNewsletter,
 } from '../api/newsletter';
 import Modal from '../components/Modal';
 import Pagination from '../components/Pagination';
+import { RichTextField } from '../components/RichTextField';
 import { inputClass, labelClass, cancelBtnClass } from '../lib/styles';
 import PageShell from '../components/PageShell';
 import { CompactLoader } from '../components/EmptyState';
@@ -30,20 +33,32 @@ export default function Newsletter() {
   const [sendModalOpen, setSendModalOpen] = useState(false);
   const [addModalOpen, setAddModalOpen] = useState(false);
   const [subject, setSubject] = useState('');
-  const [message, setMessage] = useState('');
+  const [bodyHtml, setBodyHtml] = useState('');
+  const [audience, setAudience] = useState<'selected' | 'all'>('selected');
+  const [testEmail, setTestEmail] = useState('');
+  const [isSending, setIsSending] = useState(false);
+  const [sendResult, setSendResult] = useState<{ type: 'error' | 'success'; msg: string } | null>(null);
   const [newEmails, setNewEmails] = useState('');
   const [isAdding, setIsAdding] = useState(false);
   const [addStatus, setAddStatus] = useState<{ type: 'error'|'success', msg: string } | null>(null);
-  const [sendStatus, setSendStatus] = useState<'idle' | 'success' | 'info'>('idle');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [isBulkDeleting, setIsBulkDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
+  const { data: me } = useMeQuery();
   const items = data?.items ?? [];
   const totalCount = data?.total ?? 0;
+  const activeTotal = data?.activeTotal ?? 0;
   const pageItemCount = items.length;
   const selectedCount = selectedIds.size;
+  const recipientCount = audience === 'all' ? activeTotal : selectedCount;
+  // Quill leaves `<p><br></p>` behind in an "empty" editor, so emptiness is judged
+  // on readable text rather than on string length.
+  const bodyIsEmpty =
+    !/<img\b/i.test(bodyHtml) &&
+    !bodyHtml.replace(/<[^>]*>/g, '').replace(/&nbsp;/gi, ' ').trim();
+  const composeReady = subject.trim().length > 0 && !bodyIsEmpty;
   const allPageSelected = pageItemCount > 0 && items.every((i) => selectedIds.has(i._id));
 
   const handleSelectAllPage = () => {
@@ -69,8 +84,10 @@ export default function Newsletter() {
 
   const handleOpenSendModal = () => {
     setSubject('');
-    setMessage('');
-    setSendStatus('idle');
+    setBodyHtml('');
+    setSendResult(null);
+    setAudience(selectedIds.size > 0 ? 'selected' : 'all');
+    setTestEmail(me?.admin.email ?? '');
     setSendModalOpen(true);
   };
 
@@ -122,9 +139,63 @@ export default function Newsletter() {
     }
   };
 
-  const handleSendNewsletter = (e: React.FormEvent) => {
+  /** A test send to yourself is the only reliable way to catch a broken layout or a
+   *  spam-folder landing before the whole list sees it. */
+  const handleSendTest = async () => {
+    const email = testEmail.trim();
+    if (!email) {
+      setSendResult({ type: 'error', msg: 'Enter an address to send the test to.' });
+      return;
+    }
+    setSendResult(null);
+    setIsSending(true);
+    try {
+      await sendNewsletter({ subject, html: bodyHtml, testEmail: email });
+      setSendResult({
+        type: 'success',
+        msg: `Test sent to ${email}. Check how it renders, and whether it landed in spam, before sending for real.`,
+      });
+    } catch (err) {
+      setSendResult({ type: 'error', msg: err instanceof Error ? err.message : 'Failed to send test' });
+    } finally {
+      setIsSending(false);
+    }
+  };
+
+  const handleSendNewsletter = async (e: React.FormEvent) => {
     e.preventDefault();
-    setSendStatus('info');
+    if (recipientCount === 0) return;
+    if (
+      !confirm(
+        `Send "${subject}" to ${recipientCount} subscriber${recipientCount === 1 ? '' : 's'}? This cannot be undone.`
+      )
+    )
+      return;
+
+    setSendResult(null);
+    setIsSending(true);
+    try {
+      const res = await sendNewsletter(
+        audience === 'all'
+          ? { subject, html: bodyHtml, sendToAll: true }
+          : { subject, html: bodyHtml, recipientIds: Array.from(selectedIds) }
+      );
+      setSendResult(
+        res.failed > 0
+          ? {
+              type: 'error',
+              msg: `Sent to ${res.sent} of ${res.total}. ${res.failed} failed — check the server logs for the addresses.`,
+            }
+          : { type: 'success', msg: `Sent to ${res.sent} subscriber${res.sent === 1 ? '' : 's'}.` }
+      );
+    } catch (err) {
+      setSendResult({
+        type: 'error',
+        msg: err instanceof Error ? err.message : 'Failed to send newsletter',
+      });
+    } finally {
+      setIsSending(false);
+    }
   };
 
   const invalidateSubscriptions = () =>
@@ -202,16 +273,47 @@ export default function Newsletter() {
           open={sendModalOpen}
           onClose={() => setSendModalOpen(false)}
           title="Send newsletter email"
-          maxWidth="max-w-lg"
+          maxWidth="max-w-2xl"
         >
-          <p className="text-gray-500 text-sm mb-4">
-            {totalCount === 0
-              ? 'No subscribers yet. Add signups from the public site first.'
-              : selectedCount === 0
-                ? 'No subscribers selected. Use Select all or check individuals in the list below, then open this again.'
-                : `This will send an email to ${selectedCount} selected subscriber${selectedCount === 1 ? '' : 's'}.`}
-          </p>
           <form onSubmit={handleSendNewsletter} className="flex flex-col gap-4">
+            <fieldset className="border border-gray-300 rounded-lg p-3">
+              <legend className="px-1 text-sm font-medium text-gray-700">Recipients</legend>
+              <div className="flex flex-col gap-2">
+                <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+                  <input
+                    type="radio"
+                    name="audience"
+                    checked={audience === 'selected'}
+                    onChange={() => setAudience('selected')}
+                    disabled={selectedCount === 0}
+                    className="cursor-pointer"
+                  />
+                  <span className={selectedCount === 0 ? 'text-gray-400' : undefined}>
+                    {selectedCount === 0
+                      ? 'Selected subscribers (none checked in the list)'
+                      : `Selected subscribers (${selectedCount})`}
+                  </span>
+                </label>
+                <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+                  <input
+                    type="radio"
+                    name="audience"
+                    checked={audience === 'all'}
+                    onChange={() => setAudience('all')}
+                    className="cursor-pointer"
+                  />
+                  <span>
+                    All active subscribers ({activeTotal})
+                    {totalCount > activeTotal && (
+                      <span className="text-gray-500">
+                        {' '}— {totalCount - activeTotal} unsubscribed, excluded
+                      </span>
+                    )}
+                  </span>
+                </label>
+              </div>
+            </fieldset>
+
             <label>
               <span className={labelClass}>Subject</span>
               <input
@@ -223,36 +325,61 @@ export default function Newsletter() {
                 className={inputClass}
               />
             </label>
-            <label>
-              <span className={labelClass}>Message</span>
-              <textarea
-                value={message}
-                onChange={(e) => setMessage(e.target.value)}
-                placeholder="Write your newsletter content..."
-                rows={6}
-                required
-                className={`${inputClass} resize-y`}
-              />
-            </label>
-            {sendStatus === 'info' && (
-              <p className="text-amber-600 text-sm">
-                Frontend only — sending is not connected to the backend yet.
+
+            <RichTextField
+              label="Message"
+              hint="Each subscriber gets their own copy with a personal unsubscribe link. A plain-text version is generated automatically."
+              value={bodyHtml}
+              onChange={setBodyHtml}
+              preset="article"
+              placeholder="Write your newsletter content..."
+              minHeight={260}
+            />
+
+            <div className="border-t border-gray-200 pt-4">
+              <span className={labelClass}>Send a test first</span>
+              <div className="flex gap-2">
+                <input
+                  type="email"
+                  value={testEmail}
+                  onChange={(e) => setTestEmail(e.target.value)}
+                  placeholder="you@example.com"
+                  className={inputClass}
+                />
+                <button
+                  type="button"
+                  onClick={handleSendTest}
+                  disabled={isSending || !composeReady || !testEmail.trim()}
+                  className="shrink-0 py-2 px-4 text-sm font-medium text-primary-600 bg-white border border-primary-600 rounded-lg cursor-pointer hover:bg-primary-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Send test
+                </button>
+              </div>
+              <p className="text-xs text-gray-500 mt-1">
+                Sends one copy to this address only. Nothing is recorded and no subscriber is emailed.
+              </p>
+            </div>
+
+            {sendResult && (
+              <p className={sendResult.type === 'error' ? 'text-red-600 text-sm' : 'text-green-600 text-sm'}>
+                {sendResult.msg}
               </p>
             )}
-            {sendStatus === 'success' && (
-              <p className="text-green-600 text-sm">Email sent successfully.</p>
-            )}
-            <div className="flex gap-2">
+
+            <div className="flex gap-2 border-t border-gray-200 pt-4">
               <button
                 type="submit"
-                disabled={totalCount === 0 || selectedCount === 0}
+                disabled={isSending || !composeReady || recipientCount === 0}
                 className="py-2 px-4 text-sm font-medium text-white bg-primary-600 border-0 rounded-lg cursor-pointer hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                Send newsletter
+                {isSending
+                  ? 'Sending…'
+                  : `Send to ${recipientCount} subscriber${recipientCount === 1 ? '' : 's'}`}
               </button>
               <button
                 type="button"
                 onClick={() => setSendModalOpen(false)}
+                disabled={isSending}
                 className={cancelBtnClass}
               >
                 Cancel
