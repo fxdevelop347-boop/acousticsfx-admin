@@ -1,18 +1,39 @@
 import { useState } from 'react';
+import { Star } from 'lucide-react';
+import { useQueryClient } from '@tanstack/react-query';
 import { useCaseStudiesList } from '../hooks/useCaseStudiesList';
 import {
   createCaseStudy,
   updateCaseStudy,
   deleteCaseStudy,
   type CaseStudyItem,
+  type CaseStudyPayload,
 } from '../api/caseStudies';
-import { useQueryClient } from '@tanstack/react-query';
-import { inputClass, labelClass, cancelBtnClass } from '../lib/styles';
-import { slugify } from '../lib/slugify';
-import { ImageUploadField } from '../components/ImageUploadField';
+import { deleteBtnClass, editBtnClass } from '../lib/styles';
 import PageShell from '../components/PageShell';
 import Modal from '../components/Modal';
+import CaseStudyForm from '../components/CaseStudyForm';
 import { EmptyState, ErrorState, InlineLoader } from '../components/EmptyState';
+
+/** Records created before `isPublished` existed are live. */
+function isLive(item: CaseStudyItem): boolean {
+  return item.isPublished !== false;
+}
+
+function StatusPill({ live }: { live: boolean }) {
+  return (
+    <span
+      className={`inline-flex items-center gap-1.5 py-0.5 px-2 rounded-full text-xs font-medium ${
+        live ? 'bg-green-50 text-green-700' : 'bg-gray-100 text-gray-600'
+      }`}
+    >
+      <span
+        className={`h-1.5 w-1.5 rounded-full ${live ? 'bg-green-500' : 'bg-gray-400'}`}
+      />
+      {live ? 'Live' : 'Draft'}
+    </span>
+  );
+}
 
 export default function CaseStudies() {
   const queryClient = useQueryClient();
@@ -21,27 +42,19 @@ export default function CaseStudies() {
   const [adding, setAdding] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
-  const [form, setForm] = useState({ slug: '', title: '', description: '', image: '', order: 0 });
 
-  const invalidate = () => queryClient.invalidateQueries({ queryKey: ['admin', 'case-studies'] });
+  const invalidate = () =>
+    queryClient.invalidateQueries({ queryKey: ['admin', 'case-studies'] });
 
   const openAdd = () => {
     setAdding(true);
     setEditing(null);
-    setForm({ slug: '', title: '', description: '', image: '', order: 0 });
     setSaveError(null);
   };
 
   const openEdit = (item: CaseStudyItem) => {
     setEditing(item);
     setAdding(false);
-    setForm({
-      slug: item.slug,
-      title: item.title,
-      description: item.description,
-      image: item.image ?? '',
-      order: item.order ?? 0,
-    });
     setSaveError(null);
   };
 
@@ -51,23 +64,14 @@ export default function CaseStudies() {
     setSaveError(null);
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSubmit = async (payload: CaseStudyPayload) => {
     setSaving(true);
     setSaveError(null);
     try {
-      const slug = editing ? form.slug.trim() : slugify(form.title.trim());
-      const body = {
-        slug,
-        title: form.title.trim(),
-        description: form.description.trim(),
-        image: form.image.trim(),
-        order: form.order,
-      };
       if (editing) {
-        await updateCaseStudy(editing._id, body);
+        await updateCaseStudy(editing._id, payload);
       } else {
-        await createCaseStudy(body);
+        await createCaseStudy(payload);
       }
       closeForm();
       invalidate();
@@ -89,6 +93,8 @@ export default function CaseStudies() {
     }
   };
 
+  const open = adding || !!editing;
+
   return (
     <PageShell
       title="Case studies"
@@ -102,124 +108,117 @@ export default function CaseStudies() {
         </button>
       }
     >
-        <Modal
-          open={adding || !!editing}
-          onClose={closeForm}
-          title={editing ? 'Edit case study' : 'Add case study'}
-          maxWidth="max-w-lg"
-        >
-          <form onSubmit={handleSubmit} className="flex flex-col gap-3">
-            <label>
-              <span className={labelClass}>Title</span>
-              <input
-                type="text"
-                value={form.title}
-                onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
-                required
-                className={inputClass}
-              />
-            </label>
-            <label>
-              <span className={labelClass}>Description</span>
-              <textarea
-                value={form.description}
-                onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
-                rows={3}
-                className={`${inputClass} resize-y`}
-              />
-            </label>
-            <ImageUploadField
-              label="Image"
-              hint="Upload via ImageKit or paste URL."
-              value={form.image}
-              onChange={(url) => setForm((f) => ({ ...f, image: url }))}
-            />
-            <label>
-              <span className={labelClass}>Order</span>
-              <input
-                type="number"
-                value={form.order}
-                onChange={(e) => setForm((f) => ({ ...f, order: Number(e.target.value) || 0 }))}
-                className={inputClass}
-              />
-            </label>
-            <div className="flex gap-2">
-              <button
-                type="submit"
-                disabled={saving || !form.title.trim()}
-                className="py-2 px-4 text-sm font-medium text-white bg-primary-600 border-0 rounded-lg cursor-pointer hover:bg-primary-700 disabled:opacity-60"
-              >
-                {saving ? 'Saving…' : 'Save'}
-              </button>
-              <button
-                type="button"
-                onClick={closeForm}
-                className={cancelBtnClass}
-              >
-                Cancel
-              </button>
-            </div>
-            {saveError && <p className="m-0 text-sm text-red-600">{saveError}</p>}
-          </form>
-        </Modal>
+      <Modal
+        open={open}
+        onClose={closeForm}
+        title={editing ? 'Edit case study' : 'Add case study'}
+        maxWidth="max-w-2xl"
+      >
+        {/* Keyed so the form resets its internal state between records. */}
+        {open && (
+          <CaseStudyForm
+            key={editing?._id ?? 'new'}
+            editing={editing}
+            saving={saving}
+            saveError={saveError}
+            onSubmit={handleSubmit}
+            onCancel={closeForm}
+          />
+        )}
+      </Modal>
 
-        <section className="mb-8">
-          <h2 className="m-0 mb-4 text-base font-semibold text-gray-500 uppercase tracking-wider">
-            All case studies
-          </h2>
-          {isLoading && <InlineLoader />}
-          {isError && <ErrorState message={error instanceof Error ? error.message : 'Failed to load case studies'} />}
-          {data && (
-            <div className="overflow-x-auto rounded-xl border border-gray-300">
-              <table className="w-full border-collapse text-left">
-                <thead>
-                  <tr className="border-b border-gray-300">
-                    <th className="py-2 px-3">Image</th>
-                    <th className="py-2 px-3">Slug</th>
-                    <th className="py-2 px-3">Title</th>
-                    <th className="py-2 px-3">Order</th>
-                    <th className="py-2 px-3"></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.items.map((item) => (
-                    <tr key={item._id} className="border-b border-gray-200 hover:bg-gray-100 transition-colors">
-                      <td className="py-2 px-3">
-                        {item.image ? (
-                          <img src={item.image} alt={item.title} className="h-10 w-auto max-w-[80px] rounded object-cover" />
-                        ) : (
-                          <span className="text-gray-300 text-xs">—</span>
+      <section className="mb-8">
+        <h2 className="m-0 mb-4 text-base font-semibold text-gray-500 uppercase tracking-wider">
+          All case studies
+        </h2>
+        {isLoading && <InlineLoader />}
+        {isError && (
+          <ErrorState
+            message={error instanceof Error ? error.message : 'Failed to load case studies'}
+          />
+        )}
+        {data && data.items.length > 0 && (
+          <div className="overflow-x-auto rounded-xl border border-gray-300">
+            <table className="w-full border-collapse text-left">
+              <thead>
+                <tr className="border-b border-gray-300">
+                  <th className="py-2 px-3">Image</th>
+                  <th className="py-2 px-3">Title</th>
+                  <th className="py-2 px-3">Industry</th>
+                  <th className="py-2 px-3">Client</th>
+                  <th className="py-2 px-3">Status</th>
+                  <th className="py-2 px-3">Order</th>
+                  <th className="py-2 px-3"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.items.map((item) => (
+                  <tr
+                    key={item._id}
+                    className="border-b border-gray-200 hover:bg-gray-100 transition-colors"
+                  >
+                    <td className="py-2 px-3">
+                      {item.image ? (
+                        <img
+                          src={item.image}
+                          alt=""
+                          className="h-10 w-auto max-w-[80px] rounded object-cover"
+                        />
+                      ) : (
+                        <span className="text-gray-300 text-xs">—</span>
+                      )}
+                    </td>
+                    <td className="py-2 px-3">
+                      <span className="inline-flex items-center gap-1.5">
+                        {item.isFeatured && (
+                          <Star
+                            size={14}
+                            className="text-amber-500 fill-amber-500 flex-shrink-0"
+                            aria-label="Featured"
+                          />
                         )}
-                      </td>
-                      <td className="py-2 px-3 font-mono text-sm">{item.slug}</td>
-                      <td className="py-2 px-3">{item.title}</td>
-                      <td className="py-2 px-3">{item.order}</td>
-                      <td className="py-2 px-3">
-                        <button
-                          type="button"
-                          onClick={() => openEdit(item)}
-                          className="py-1 px-2 text-sm text-primary-400 hover:underline mr-2"
-                        >
-                          Edit
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleDelete(item._id)}
-                          className="py-1 px-2 text-sm text-red-600 hover:underline"
-                        >
-                          Delete
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-          {data && data.items.length === 0 && !adding && (
-            <EmptyState message="No case studies yet. Add one to get started." />
-          )}
-        </section>
+                        {item.title}
+                      </span>
+                      <span className="block font-mono text-xs text-gray-400">
+                        {item.slug}
+                      </span>
+                    </td>
+                    <td className="py-2 px-3 text-sm text-gray-600">
+                      {item.industry || <span className="text-gray-300">—</span>}
+                    </td>
+                    <td className="py-2 px-3 text-sm text-gray-600">
+                      {item.client || <span className="text-gray-300">—</span>}
+                    </td>
+                    <td className="py-2 px-3">
+                      <StatusPill live={isLive(item)} />
+                    </td>
+                    <td className="py-2 px-3">{item.order}</td>
+                    <td className="py-2 px-3 whitespace-nowrap">
+                      <button
+                        type="button"
+                        onClick={() => openEdit(item)}
+                        className={`${editBtnClass} mr-2`}
+                      >
+                        Edit
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDelete(item._id)}
+                        className={deleteBtnClass}
+                      >
+                        Delete
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        {data && data.items.length === 0 && (
+          <EmptyState message="No case studies yet. Add one to get started." />
+        )}
+      </section>
     </PageShell>
   );
 }
