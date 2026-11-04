@@ -8,6 +8,7 @@ import {
   deleteNewsletterSubscription,
   deleteNewsletterSubscriptions,
   sendNewsletter,
+  type SendNewsletterResponse,
 } from '../api/newsletter';
 import Modal from '../components/Modal';
 import Pagination from '../components/Pagination';
@@ -24,6 +25,16 @@ function formatDate(iso: string) {
   } catch {
     return iso;
   }
+}
+
+/** Spells out why a send failed and who missed it, since the admin cannot see the server logs. */
+function describeFailedSend(res: SendNewsletterResponse): string {
+  const reason = res.error ? ` Reason: ${res.error}` : '';
+  // When nothing was sent the problem is the whole send, so listing every address adds nothing.
+  const addresses = res.sent > 0 && res.failedRecipients?.length
+    ? ` Not sent to: ${res.failedRecipients.slice(0, 5).join(', ')}${res.failed > 5 ? ` and ${res.failed - 5} more` : ''}.`
+    : '';
+  return `Sent to ${res.sent} of ${res.total}. ${res.failed} failed.${reason}${addresses}`;
 }
 
 export default function Newsletter() {
@@ -150,11 +161,15 @@ export default function Newsletter() {
     setSendResult(null);
     setIsSending(true);
     try {
-      await sendNewsletter({ subject, html: bodyHtml, testEmail: email });
-      setSendResult({
-        type: 'success',
-        msg: `Test sent to ${email}. Check how it renders, and whether it landed in spam, before sending for real.`,
-      });
+      const res = await sendNewsletter({ subject, html: bodyHtml, testEmail: email });
+      setSendResult(
+        res.ok
+          ? {
+              type: 'success',
+              msg: `Test sent to ${email}. Check how it renders, and whether it landed in spam, before sending for real.`,
+            }
+          : { type: 'error', msg: `Test not sent: ${res.error ?? 'the mail provider rejected it.'}` }
+      );
     } catch (err) {
       setSendResult({ type: 'error', msg: err instanceof Error ? err.message : 'Failed to send test' });
     } finally {
@@ -184,7 +199,7 @@ export default function Newsletter() {
         res.failed > 0
           ? {
               type: 'error',
-              msg: `Sent to ${res.sent} of ${res.total}. ${res.failed} failed — check the server logs for the addresses.`,
+              msg: describeFailedSend(res),
             }
           : { type: 'success', msg: `Sent to ${res.sent} subscriber${res.sent === 1 ? '' : 's'}.` }
       );
