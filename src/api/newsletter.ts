@@ -65,6 +65,10 @@ export interface SendNewsletterResponse {
   total: number;
   sent: number;
   failed: number;
+  /** Addresses that could not be sent to (capped by the server). */
+  failedRecipients?: string[];
+  /** The mail provider's reason for the first failure. */
+  error?: string;
   campaignId?: string;
 }
 
