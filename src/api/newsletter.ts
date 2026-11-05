@@ -95,6 +95,8 @@ export interface NewsletterCampaignSummary {
   recipientCount: number;
   sentCount: number;
   failedCount: number;
+  /** Messages the provider accepted, then reported as bounced or marked as spam. */
+  bouncedCount: number;
   sentByEmail: string;
   createdAt: string;
   lastResendAt: string | null;
@@ -112,8 +114,19 @@ export interface NewsletterCampaignFailure {
   status: NewsletterStatus | 'removed';
 }
 
+export interface NewsletterCampaignBounce extends NewsletterCampaignFailure {
+  kind: 'bounced' | 'complained';
+  /** False for a temporary bounce, which does not stop future sends. */
+  permanent: boolean;
+  occurredAt: string;
+  resentAt: string | null;
+  /** True once the address has been corrected and the send has not gone to it yet. */
+  canResend: boolean;
+}
+
 export interface NewsletterCampaignDetail extends NewsletterCampaignSummary {
   failures: NewsletterCampaignFailure[];
+  bounces: NewsletterCampaignBounce[];
 }
 
 export interface ResendFailedResponse {
