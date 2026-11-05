@@ -65,8 +65,8 @@ export interface SendNewsletterResponse {
   total: number;
   sent: number;
   failed: number;
-  /** Addresses that could not be sent to (capped by the server). */
-  failedRecipients?: string[];
+  /** Who the send did not reach and why (capped by the server). */
+  failures?: { email: string; reason: string | null }[];
   /** The mail provider's reason for the first failure. */
   error?: string;
   campaignId?: string;
@@ -76,5 +76,70 @@ export function sendNewsletter(payload: SendNewsletterPayload): Promise<SendNews
   return request<SendNewsletterResponse>('/api/admin/newsletter/send', {
     method: 'POST',
     body: JSON.stringify(payload),
+  });
+}
+
+export function updateNewsletterSubscriptionEmail(
+  id: string,
+  email: string
+): Promise<{ ok: boolean; email: string }> {
+  return request<{ ok: boolean; email: string }>(`/api/admin/newsletter-subscriptions/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ email }),
+  });
+}
+
+export interface NewsletterCampaignSummary {
+  _id: string;
+  subject: string;
+  recipientCount: number;
+  sentCount: number;
+  failedCount: number;
+  sentByEmail: string;
+  createdAt: string;
+  lastResendAt: string | null;
+}
+
+export interface NewsletterCampaignFailure {
+  /** The address the send was attempted at. */
+  email: string;
+  /** Null on sends made before reasons were recorded. */
+  reason: string | null;
+  /** Null once the subscriber has been removed from the list. */
+  subscriptionId: string | null;
+  /** The subscriber's address now, which differs from `email` after a correction. */
+  currentEmail: string | null;
+  status: NewsletterStatus | 'removed';
+}
+
+export interface NewsletterCampaignDetail extends NewsletterCampaignSummary {
+  failures: NewsletterCampaignFailure[];
+}
+
+export interface ResendFailedResponse {
+  ok: boolean;
+  total: number;
+  sent: number;
+  failed: number;
+  error?: string;
+  failures: NewsletterCampaignFailure[];
+}
+
+export function listNewsletterCampaigns(params: { limit: number; skip: number }): Promise<{
+  items: NewsletterCampaignSummary[];
+  total: number;
+  limit: number;
+  skip: number;
+}> {
+  return request(`/api/admin/newsletter/campaigns?limit=${params.limit}&skip=${params.skip}`);
+}
+
+export function getNewsletterCampaign(id: string): Promise<NewsletterCampaignDetail> {
+  return request<NewsletterCampaignDetail>(`/api/admin/newsletter/campaigns/${id}`);
+}
+
+export function resendFailedNewsletter(id: string): Promise<ResendFailedResponse> {
+  return request<ResendFailedResponse>(`/api/admin/newsletter/campaigns/${id}/resend-failed`, {
+    method: 'POST',
   });
 }
