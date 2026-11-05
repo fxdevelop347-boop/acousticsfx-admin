@@ -11,6 +11,7 @@ import {
   type SendNewsletterResponse,
 } from '../api/newsletter';
 import Modal from '../components/Modal';
+import NewsletterSendHistory from '../components/NewsletterSendHistory';
 import Pagination from '../components/Pagination';
 import { RichTextField } from '../components/RichTextField';
 import { inputClass, labelClass, cancelBtnClass } from '../lib/styles';
@@ -27,14 +28,10 @@ function formatDate(iso: string) {
   }
 }
 
-/** Spells out why a send failed and who missed it, since the admin cannot see the server logs. */
+/** The whole send failed for one reason, so it is worth saying once rather than per address. */
 function describeFailedSend(res: SendNewsletterResponse): string {
-  const reason = res.error ? ` Reason: ${res.error}` : '';
-  // When nothing was sent the problem is the whole send, so listing every address adds nothing.
-  const addresses = res.sent > 0 && res.failedRecipients?.length
-    ? ` Not sent to: ${res.failedRecipients.slice(0, 5).join(', ')}${res.failed > 5 ? ` and ${res.failed - 5} more` : ''}.`
-    : '';
-  return `Sent to ${res.sent} of ${res.total}. ${res.failed} failed.${reason}${addresses}`;
+  const reason = res.sent === 0 && res.error ? ` Reason: ${res.error}` : '';
+  return `Sent to ${res.sent} of ${res.total}. ${res.failed} failed.${reason}`;
 }
 
 export default function Newsletter() {
@@ -49,6 +46,8 @@ export default function Newsletter() {
   const [testEmail, setTestEmail] = useState('');
   const [isSending, setIsSending] = useState(false);
   const [sendResult, setSendResult] = useState<{ type: 'error' | 'success'; msg: string } | null>(null);
+  /** Set once a real send reached anyone. Sending again from here would email them twice. */
+  const [completedSend, setCompletedSend] = useState<SendNewsletterResponse | null>(null);
   const [newEmails, setNewEmails] = useState('');
   const [isAdding, setIsAdding] = useState(false);
   const [addStatus, setAddStatus] = useState<{ type: 'error'|'success', msg: string } | null>(null);
@@ -97,6 +96,7 @@ export default function Newsletter() {
     setSubject('');
     setBodyHtml('');
     setSendResult(null);
+    setCompletedSend(null);
     setAudience(selectedIds.size > 0 ? 'selected' : 'all');
     setTestEmail(me?.admin.email ?? '');
     setSendModalOpen(true);
@@ -195,6 +195,8 @@ export default function Newsletter() {
           ? { subject, html: bodyHtml, sendToAll: true }
           : { subject, html: bodyHtml, recipientIds: Array.from(selectedIds) }
       );
+      if (res.sent > 0) setCompletedSend(res);
+      queryClient.invalidateQueries({ queryKey: ['admin', 'newsletter-campaigns'] });
       setSendResult(
         res.failed > 0
           ? {
@@ -364,7 +366,7 @@ export default function Newsletter() {
                 <button
                   type="button"
                   onClick={handleSendTest}
-                  disabled={isSending || !composeReady || !testEmail.trim()}
+                  disabled={isSending || !composeReady || !testEmail.trim() || completedSend !== null}
                   className="shrink-0 py-2 px-4 text-sm font-medium text-primary-600 bg-white border border-primary-600 rounded-lg cursor-pointer hover:bg-primary-50 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   Send test
@@ -381,7 +383,24 @@ export default function Newsletter() {
               </p>
             )}
 
+            {completedSend && completedSend.failed > 0 && (
+              <div className="border border-red-200 rounded-lg overflow-hidden">
+                <ul className="m-0 p-0 list-none max-h-48 overflow-y-auto divide-y divide-gray-200 text-sm">
+                  {completedSend.failures?.map((f) => (
+                    <li key={f.email} className="px-3 py-2">
+                      <span className="font-medium text-gray-900 break-all">{f.email}</span>
+                      <span className="block text-gray-500">{f.reason ?? 'Reason not recorded'}</span>
+                    </li>
+                  ))}
+                </ul>
+                <p className="m-0 px-3 py-2 text-xs text-gray-500 bg-gray-50 border-t border-gray-200">
+                  Close this window and open Send history below to correct these and resend to them only.
+                </p>
+              </div>
+            )}
+
             <div className="flex gap-2 border-t border-gray-200 pt-4">
+              {!completedSend && (
               <button
                 type="submit"
                 disabled={isSending || !composeReady || recipientCount === 0}
@@ -391,13 +410,14 @@ export default function Newsletter() {
                   ? 'Sending…'
                   : `Send to ${recipientCount} subscriber${recipientCount === 1 ? '' : 's'}`}
               </button>
+              )}
               <button
                 type="button"
                 onClick={() => setSendModalOpen(false)}
                 disabled={isSending}
                 className={cancelBtnClass}
               >
-                Cancel
+                {completedSend ? 'Close' : 'Cancel'}
               </button>
             </div>
           </form>
@@ -446,6 +466,8 @@ export default function Newsletter() {
             </div>
           </form>
         </Modal>
+        <NewsletterSendHistory />
+
         <section>
           <p className="m-0 mb-2 text-[0.9375rem] text-gray-500">
             Emails submitted via the newsletter signup on the public site.
