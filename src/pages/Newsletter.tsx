@@ -323,7 +323,7 @@ export default function Newsletter() {
                     All active subscribers ({activeTotal})
                     {totalCount > activeTotal && (
                       <span className="text-gray-500">
-                        {' '}— {totalCount - activeTotal} unsubscribed, excluded
+                        {' '}— {totalCount - activeTotal} unsubscribed or bounced, excluded
                       </span>
                     )}
                   </span>
@@ -552,6 +552,11 @@ export default function Newsletter() {
                           <a href={`mailto:${row.email}`} className="text-primary-400 hover:underline">
                             {row.email}
                           </a>
+                          {row.status !== 'active' && (
+                            <span className="ml-2 text-xs text-gray-500">
+                              {row.status === 'bounced' ? 'Bounced' : 'Unsubscribed'}
+                            </span>
+                          )}
                         </td>
                         <td className="px-4 py-3 text-right">
                           <button

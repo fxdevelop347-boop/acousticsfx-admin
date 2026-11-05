@@ -6,6 +6,7 @@ import {
   listNewsletterCampaigns,
   resendFailedNewsletter,
   updateNewsletterSubscriptionEmail,
+  type NewsletterCampaignDetail,
   type NewsletterCampaignFailure,
 } from '../api/newsletter';
 import { cancelBtnClass, deleteBtnClass, editBtnClass, inputClass, primaryBtnClass } from '../lib/styles';
@@ -18,26 +19,75 @@ function formatDate(iso: string) {
   return new Date(iso).toLocaleString();
 }
 
-/** Anyone removed or unsubscribed stays on record as missed, but must not be emailed again. */
+/** Anyone removed, unsubscribed or bounced stays on record as missed, but must not be emailed again. */
 function canResendTo(f: NewsletterCampaignFailure): boolean {
-  return f.status !== 'removed' && f.status !== 'unsubscribed';
+  return f.status !== 'removed' && f.status !== 'unsubscribed' && f.status !== 'bounced';
 }
 
-function failuresToCsv(failures: NewsletterCampaignFailure[]): string {
+/** One row of the problems table, whether the send failed outright or bounced afterwards. */
+interface ProblemRow {
+  key: string;
+  problem: string;
+  email: string;
+  currentEmail: string | null;
+  subscriptionId: string | null;
+  status: NewsletterCampaignFailure['status'];
+  reason: string;
+  /** A spam complaint is not about the address, so correcting it would make no sense. */
+  canCorrect: boolean;
+  /** Already sent again to the corrected address. */
+  resentAt: string | null;
+}
+
+function toRows(data: NewsletterCampaignDetail): ProblemRow[] {
+  const failed = data.failures.map((f): ProblemRow => ({
+    key: `failed:${f.subscriptionId ?? f.email}`,
+    problem: 'Not sent',
+    email: f.email,
+    currentEmail: f.currentEmail,
+    subscriptionId: f.subscriptionId,
+    status: f.status,
+    reason: f.reason ?? 'Reason not recorded',
+    canCorrect: true,
+    resentAt: null,
+  }));
+  const bounced = data.bounces.map((b): ProblemRow => ({
+    key: `${b.kind}:${b.subscriptionId ?? b.email}:${b.occurredAt}`,
+    problem: b.kind === 'complained' ? 'Marked as spam' : b.permanent ? 'Bounced' : 'Temporary bounce',
+    email: b.email,
+    currentEmail: b.currentEmail,
+    subscriptionId: b.subscriptionId,
+    status: b.status,
+    reason: b.reason ?? 'Reason not recorded',
+    canCorrect: b.kind === 'bounced',
+    resentAt: b.resentAt,
+  }));
+  return [...failed, ...bounced];
+}
+
+function statusNote(row: ProblemRow): string | null {
+  if (row.resentAt) return 'Sent again to the new address';
+  if (row.status === 'removed') return 'Removed from list';
+  if (row.status === 'unsubscribed') return 'Unsubscribed';
+  if (row.status === 'bounced') return 'No longer emailed';
+  return null;
+}
+
+function rowsToCsv(rows: ProblemRow[]): string {
   const cell = (value: string) => {
     // A leading formula character would run as a formula when opened in a spreadsheet.
     const safe = /^[=+\-@]/.test(value) ? `'${value}` : value;
     return `"${safe.replace(/"/g, '""')}"`;
   };
-  const rows = failures.map((f) => [f.email, f.reason ?? 'Reason not recorded', f.status].map(cell).join(','));
-  return ['Email,Reason,Status', ...rows].join('\r\n');
+  const lines = rows.map((r) => [r.email, r.problem, r.reason, r.status].map(cell).join(','));
+  return ['Email,Problem,Reason,Status', ...lines].join('\r\n');
 }
 
-function downloadCsv(failures: NewsletterCampaignFailure[]) {
-  const url = URL.createObjectURL(new Blob([failuresToCsv(failures)], { type: 'text/csv' }));
+function downloadCsv(rows: ProblemRow[]) {
+  const url = URL.createObjectURL(new Blob([rowsToCsv(rows)], { type: 'text/csv' }));
   const link = document.createElement('a');
   link.href = url;
-  link.download = 'newsletter-failed-addresses.csv';
+  link.download = 'newsletter-delivery-problems.csv';
   link.click();
   URL.revokeObjectURL(url);
 }
@@ -61,7 +111,11 @@ function FailedAddresses({ campaignId }: { campaignId: string }) {
     );
   }
 
-  const resendable = data.failures.filter(canResendTo);
+  const rows = toRows(data);
+  // A subscriber can appear more than once, but only ever gets one copy.
+  const resendCount = new Set(
+    [...data.failures.filter(canResendTo), ...data.bounces.filter((b) => b.canResend)].map((f) => f.subscriptionId)
+  ).size;
   const refresh = () => {
     queryClient.invalidateQueries({ queryKey: ['admin', 'newsletter-campaigns'] });
     queryClient.invalidateQueries({ queryKey: ['admin', 'newsletter-subscriptions'] });
@@ -100,7 +154,7 @@ function FailedAddresses({ campaignId }: { campaignId: string }) {
   };
 
   const handleResend = () => {
-    const count = resendable.length;
+    const count = resendCount;
     if (
       !confirm(
         `Send "${data.subject}" to ${count} address${count === 1 ? '' : 'es'}? The ${data.sentCount} already sent to will not get another copy.`
@@ -116,7 +170,7 @@ function FailedAddresses({ campaignId }: { campaignId: string }) {
 
   const handleCopy = () =>
     run(async () => {
-      await navigator.clipboard.writeText(data.failures.map((f) => f.currentEmail ?? f.email).join('\n'));
+      await navigator.clipboard.writeText([...new Set(rows.map((r) => r.currentEmail ?? r.email))].join('\n'));
       return 'Addresses copied.';
     });
 
@@ -127,8 +181,8 @@ function FailedAddresses({ campaignId }: { campaignId: string }) {
         {data.lastResendAt && ` Last resent ${formatDate(data.lastResendAt)}.`}
       </p>
 
-      {data.failures.length === 0 && (
-        <p className="m-0 text-sm text-green-600">Every address on this send has been sent to.</p>
+      {rows.length === 0 && (
+        <p className="m-0 text-sm text-green-600">No delivery problems reported for this send.</p>
       )}
 
       {data.failedCount > data.failures.length && (
@@ -137,44 +191,43 @@ function FailedAddresses({ campaignId }: { campaignId: string }) {
         </p>
       )}
 
-      {data.failures.length > 0 && (
+      {rows.length > 0 && (
         <div className="overflow-x-auto border border-gray-300 rounded-lg">
           <table className="w-full text-sm text-left">
             <thead className="bg-white text-gray-600">
               <tr>
                 <th className="px-3 py-2 font-medium">Email</th>
+                <th className="px-3 py-2 font-medium">Problem</th>
                 <th className="px-3 py-2 font-medium">Reason</th>
                 <th className="px-3 py-2 font-medium text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-200">
-              {data.failures.map((f) => {
-                const isEditing = editing !== null && editing.id === f.subscriptionId;
-                const corrected = f.currentEmail !== null && f.currentEmail !== f.email;
+              {rows.map((row) => {
+                const isEditing = editing !== null && editing.id === row.subscriptionId;
+                const corrected = row.currentEmail !== null && row.currentEmail !== row.email;
+                const note = statusNote(row);
                 return (
-                  <tr key={f.subscriptionId ?? f.email}>
+                  <tr key={row.key}>
                     <td className="px-3 py-2 break-all">
                       {isEditing ? (
                         <input
                           type="email"
                           value={editing.email}
                           onChange={(e) => setEditing({ id: editing.id, email: e.target.value })}
-                          aria-label={`Corrected address for ${f.email}`}
+                          aria-label={`Corrected address for ${row.email}`}
                           className={inputClass}
                         />
                       ) : (
                         <>
-                          <span className="font-medium text-gray-900">{f.currentEmail ?? f.email}</span>
-                          {corrected && <span className="block text-xs text-gray-500">was {f.email}</span>}
-                          {!canResendTo(f) && (
-                            <span className="block text-xs text-gray-500">
-                              {f.status === 'removed' ? 'Removed from list' : 'Unsubscribed'}
-                            </span>
-                          )}
+                          <span className="font-medium text-gray-900">{row.currentEmail ?? row.email}</span>
+                          {corrected && <span className="block text-xs text-gray-500">was {row.email}</span>}
+                          {note && <span className="block text-xs text-gray-500">{note}</span>}
                         </>
                       )}
                     </td>
-                    <td className="px-3 py-2 text-gray-600">{f.reason ?? 'Reason not recorded'}</td>
+                    <td className="px-3 py-2 text-gray-600 whitespace-nowrap">{row.problem}</td>
+                    <td className="px-3 py-2 text-gray-600">{row.reason}</td>
                     <td className="px-3 py-2 text-right whitespace-nowrap">
                       {isEditing ? (
                         <>
@@ -186,20 +239,22 @@ function FailedAddresses({ campaignId }: { campaignId: string }) {
                           </button>
                         </>
                       ) : (
-                        f.subscriptionId &&
-                        f.currentEmail && (
+                        row.subscriptionId &&
+                        row.currentEmail && (
                           <>
+                            {row.canCorrect && !row.resentAt && row.status !== 'unsubscribed' && (
+                              <button
+                                type="button"
+                                onClick={() => setEditing({ id: row.subscriptionId as string, email: row.currentEmail as string })}
+                                disabled={isBusy}
+                                className={editBtnClass}
+                              >
+                                Correct
+                              </button>
+                            )}
                             <button
                               type="button"
-                              onClick={() => setEditing({ id: f.subscriptionId as string, email: f.currentEmail as string })}
-                              disabled={isBusy}
-                              className={editBtnClass}
-                            >
-                              Correct
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => handleRemove(f.subscriptionId as string, f.currentEmail as string)}
+                              onClick={() => handleRemove(row.subscriptionId as string, row.currentEmail as string)}
                               disabled={isBusy}
                               className={deleteBtnClass}
                             >
@@ -223,25 +278,25 @@ function FailedAddresses({ campaignId }: { campaignId: string }) {
         </p>
       )}
 
-      {data.failures.length > 0 && (
+      {rows.length > 0 && (
         <div className="flex gap-2 flex-wrap">
-          {resendable.length > 0 && (
+          {resendCount > 0 && (
             <button type="button" onClick={handleResend} disabled={isBusy || editing !== null} className={primaryBtnClass}>
-              {isBusy ? 'Working…' : `Resend to ${resendable.length} failed`}
+              {isBusy ? 'Working…' : `Resend to ${resendCount}`}
             </button>
           )}
           <button type="button" onClick={handleCopy} disabled={isBusy} className={cancelBtnClass}>
             Copy addresses
           </button>
-          <button type="button" onClick={() => downloadCsv(data.failures)} className={cancelBtnClass}>
+          <button type="button" onClick={() => downloadCsv(rows)} className={cancelBtnClass}>
             Download CSV
           </button>
         </div>
       )}
 
       <p className="m-0 text-xs text-gray-500">
-        Sent means the mail provider accepted the message. An address it accepted can still bounce later, and those
-        bounces only appear in the Resend dashboard.
+        Sent means the mail provider accepted the message. Bounces and spam reports appear here as the provider reports
+        them, which can take a while. A bounced address only becomes available to resend after it is corrected.
       </p>
     </div>
   );
@@ -273,7 +328,7 @@ export default function NewsletterSendHistory() {
                   <th className="px-4 py-3 font-medium">Date</th>
                   <th className="px-4 py-3 font-medium">Subject</th>
                   <th className="px-4 py-3 font-medium">Sent</th>
-                  <th className="px-4 py-3 font-medium">Failed</th>
+                  <th className="px-4 py-3 font-medium">Problems</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-200">
@@ -285,13 +340,18 @@ export default function NewsletterSendHistory() {
                       {c.sentCount} of {c.recipientCount}
                     </td>
                     <td className="px-4 py-3 whitespace-nowrap">
-                      {c.failedCount > 0 ? (
+                      {c.failedCount + c.bouncedCount > 0 ? (
                         <button
                           type="button"
                           onClick={() => setViewing({ id: c._id, subject: c.subject })}
                           className="text-red-600 font-medium hover:underline cursor-pointer bg-transparent border-0 p-0"
                         >
-                          View {c.failedCount} failed
+                          {[
+                            c.failedCount > 0 && `${c.failedCount} failed`,
+                            c.bouncedCount > 0 && `${c.bouncedCount} bounced`,
+                          ]
+                            .filter(Boolean)
+                            .join(', ')}
                         </button>
                       ) : (
                         <span className="text-gray-500">None</span>
@@ -308,7 +368,7 @@ export default function NewsletterSendHistory() {
       <Modal
         open={viewing !== null}
         onClose={() => setViewing(null)}
-        title={viewing ? `Failed addresses: ${viewing.subject}` : undefined}
+        title={viewing ? `Delivery problems: ${viewing.subject}` : undefined}
         maxWidth="max-w-3xl"
       >
         {viewing && <FailedAddresses campaignId={viewing.id} />}
